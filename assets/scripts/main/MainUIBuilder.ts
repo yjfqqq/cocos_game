@@ -7,6 +7,10 @@ import {
     Color,
     Graphics,
     Button,
+    Sprite,
+    SpriteFrame,
+    Texture2D,
+    resources,
     view,
     macro,
     ResolutionPolicy
@@ -51,6 +55,18 @@ export class MainUIBuilder extends Component {
     private bagMessage = '';
     private artifactMessage = '';
 
+    private readonly artFrames: Map<string, SpriteFrame> = new Map();
+    private readonly artPaths: Record<string, string> = {
+        background: 'ui/main/main-bg-v1/texture',
+        '主页': 'ui/main/icon-home-v1/texture',
+        '角色': 'ui/main/icon-role-v1/texture',
+        '神器': 'ui/main/icon-artifact-v1/texture',
+        '图鉴': 'ui/main/icon-collection-v1/texture',
+        '背包': 'ui/main/icon-bag-v1/texture',
+        '商店': 'ui/main/icon-shop-v1/texture',
+        '成就': 'ui/main/icon-achievement-v1/texture'
+    };
+
     start() {
 
         // =====================================================
@@ -72,7 +88,41 @@ export class MainUIBuilder extends Component {
             ResolutionPolicy.SHOW_ALL
         );
 
-        this.build();
+        // 美术资源加载成功后再构建，避免首帧出现灰盒界面。
+        // 单张资源失败时仍会使用 Graphics 风格作为兜底。
+        this.loadUIArt(() => this.build());
+    }
+
+
+    private loadUIArt(onComplete: () => void): void {
+
+        const keys = Object.keys(this.artPaths);
+        let remaining = keys.length;
+
+        const finishOne = () => {
+            remaining--;
+            if (remaining <= 0) {
+                onComplete();
+            }
+        };
+
+        for (const key of keys) {
+            const path = this.artPaths[key];
+            resources.load(
+                path,
+                Texture2D,
+                (error, texture) => {
+                    if (!error && texture) {
+                        const spriteFrame = new SpriteFrame();
+                        spriteFrame.texture = texture;
+                        this.artFrames.set(key, spriteFrame);
+                    } else {
+                        console.warn(`UI 美术资源加载失败：${path}`, error);
+                    }
+                    finishOne();
+                }
+            );
+        }
     }
 
 
@@ -99,6 +149,28 @@ export class MainUIBuilder extends Component {
 
         main.setPosition(0, 0, 0);
 
+        // 背景图始终位于所有界面节点下方。
+        this.createSprite(
+            main,
+            'MainBackground',
+            'background',
+            1280,
+            720,
+            0,
+            0
+        );
+
+        // 轻微冷色遮罩保证文字在明亮云海上仍有足够对比度。
+        this.createPanel(
+            main,
+            'AtmosphereTint',
+            1280,
+            720,
+            0,
+            0,
+            new Color(5, 10, 27, 58)
+        );
+
 
         // =====================================================
         // 1. 顶部玩家信息栏
@@ -107,19 +179,21 @@ export class MainUIBuilder extends Component {
         const topBar = this.createPanel(
             main,
             'TopBar',
-            1280,
-            72,
+            1248,
+            68,
             0,
-            324,
-            new Color(35, 41, 62)
+            326,
+            new Color(18, 29, 52, 228)
         );
+
+        this.createStatusOrb(topBar, -588, 0, new Color(80, 205, 226), '仙');
 
         // 顶部信息分组：避免所有文字挤在一行，突出战力与资源。
         this.createLabel(
             topBar,
             'PlayerName',
             `${playerData.name}`,
-            -535,
+            -510,
             0,
             26,
             Color.WHITE
@@ -129,7 +203,7 @@ export class MainUIBuilder extends Component {
             topBar,
             'PlayerLevel',
             `Lv.${playerData.level}`,
-            -390,
+            -365,
             0,
             24,
             new Color(205, 210, 225)
@@ -139,7 +213,7 @@ export class MainUIBuilder extends Component {
             topBar,
             'PlayerPower',
             `战力 ${playerData.power}`,
-            -210,
+            -185,
             0,
             25,
             new Color(235, 205, 120)
@@ -147,7 +221,7 @@ export class MainUIBuilder extends Component {
 
         this.createLine(
             topBar,
-            30,
+            95,
             0,
             1,
             new Color(75, 82, 105)
@@ -157,7 +231,7 @@ export class MainUIBuilder extends Component {
             topBar,
             'Gold',
             `金币 ${playerData.gold}`,
-            390,
+            415,
             0,
             23,
             Color.WHITE
@@ -167,7 +241,7 @@ export class MainUIBuilder extends Component {
             topBar,
             'Diamond',
             `◆ ${playerData.diamond}`,
-            525,
+            550,
             0,
             23,
             new Color(190, 205, 235)
@@ -247,21 +321,21 @@ export class MainUIBuilder extends Component {
         const leftPanel = this.createPanel(
             homePage,
             'FactionPanel',
-            260,
-            500,
-            -490,
-            40,
-            new Color(31, 36, 54)
+            270,
+            486,
+            -493,
+            35,
+            new Color(15, 27, 48, 220)
         );
 
         this.createLabel(
             leftPanel,
             'FactionTitle',
-            '当前流派',
+            'CURRENT FACTION  ·  当前流派',
             0,
-            205,
-            24,
-            new Color(180, 185, 205)
+            204,
+            17,
+            new Color(128, 191, 211)
         );
 
         this.createLabel(
@@ -269,9 +343,19 @@ export class MainUIBuilder extends Component {
             'FactionName',
             '天宫',
             0,
-            155,
-            42,
-            Color.WHITE
+            158,
+            40,
+            new Color(244, 222, 159)
+        );
+
+        this.createLabel(
+            leftPanel,
+            'FactionSubTitle',
+            '三部神将 · 共筑仙庭',
+            0,
+            122,
+            16,
+            new Color(155, 170, 194)
         );
 
 
@@ -280,9 +364,9 @@ export class MainUIBuilder extends Component {
         this.createLine(
             leftPanel,
             0,
-            112,
-            200,
-            new Color(70, 76, 98)
+            98,
+            216,
+            new Color(116, 137, 173, 150)
         );
 
 
@@ -293,7 +377,7 @@ export class MainUIBuilder extends Component {
             '战神',
             '0 / 6',
             0,
-            65
+            52
         );
 
         this.createFactionProgress(
@@ -301,7 +385,7 @@ export class MainUIBuilder extends Component {
             '雷部',
             '0 / 6',
             0,
-            5
+            -12
         );
 
         this.createFactionProgress(
@@ -309,7 +393,7 @@ export class MainUIBuilder extends Component {
             '天王',
             '0 / 6',
             0,
-            -55
+            -76
         );
 
 
@@ -322,19 +406,30 @@ export class MainUIBuilder extends Component {
             'UltimateTitle',
             '终极路线',
             0,
-            -125,
-            20,
-            new Color(180, 185, 205)
+            -132,
+            17,
+            new Color(139, 158, 187)
         );
 
-        this.createLabel(
+        const ultimatePlate = this.createPanel(
             leftPanel,
-            'Ultimate',
-            '天宫彩色技能',
+            'UltimatePlate',
+            218,
+            52,
             0,
-            -165,
-            24,
-            new Color(235, 205, 120)
+            -184,
+            new Color(43, 44, 72, 232)
+        );
+        this.redrawPanel(ultimatePlate, new Color(43, 44, 72, 232), true);
+
+        this.createLabel(
+            ultimatePlate,
+            'Ultimate',
+            '✦  彩色 · 天宫  ✦',
+            0,
+            0,
+            21,
+            new Color(242, 211, 126)
         );
 
 
@@ -345,11 +440,11 @@ export class MainUIBuilder extends Component {
         const centerPanel = this.createPanel(
             homePage,
             'CenterPanel',
-            960,
-            500,
-            140,
-            40,
-            new Color(27, 32, 48)
+            928,
+            486,
+            145,
+            35,
+            new Color(13, 23, 44, 205)
         );
 
 
@@ -358,9 +453,9 @@ export class MainUIBuilder extends Component {
             'CenterTitle',
             '天宫 · 流派核心',
             0,
-            210,
-            28,
-            Color.WHITE
+            204,
+            30,
+            new Color(241, 226, 181)
         );
 
         this.createLabel(
@@ -368,34 +463,36 @@ export class MainUIBuilder extends Component {
             'CenterSubtitle',
             '修仙之路 · 从炼气期开始',
             0,
-            178,
+            168,
             16,
-            new Color(145, 152, 175)
+            new Color(135, 172, 198)
         );
+
+        this.createLine(centerPanel, 0, 145, 620, new Color(110, 145, 181, 90));
 
 
         // =====================================================
         // 流派核心
         // =====================================================
 
-        const core = this.createPanel(
+        const core = this.createNode(
             centerPanel,
             'FactionCore',
-            280,
-            280,
-            0,
-            20,
-            new Color(48, 54, 78)
+            310,
+            250
         );
+
+        core.setPosition(0, 15, 0);
+        this.drawFactionCore(core);
 
         this.createLabel(
             core,
             'CoreTitle',
             '流派核心',
             0,
-            25,
+            18,
             30,
-            Color.WHITE
+            new Color(246, 231, 188)
         );
 
         this.createLabel(
@@ -403,9 +500,9 @@ export class MainUIBuilder extends Component {
             'CoreSubTitle',
             '收集神将 · 吞噬成长',
             0,
-            -25,
+            -22,
             18,
-            new Color(175, 180, 200)
+            new Color(167, 190, 207)
         );
 
         this.createLabel(
@@ -413,9 +510,9 @@ export class MainUIBuilder extends Component {
             'CoreStatus',
             '尚未激活',
             0,
-            -75,
-            20,
-            new Color(150, 155, 175)
+            -58,
+            18,
+            new Color(110, 202, 217)
         );
 
 
@@ -428,9 +525,9 @@ export class MainUIBuilder extends Component {
             'Hint',
             '收集战神、雷部、天王神将，逐步解锁流派技能',
             0,
-            -170,
-            18,
-            new Color(145, 150, 170)
+            -137,
+            17,
+            new Color(148, 174, 198)
         );
 
 
@@ -441,31 +538,32 @@ export class MainUIBuilder extends Component {
         const startBattleBtn = this.createPanel(
             homePage,
             'StartBattleButton',
-            300,
-            68,
-            0,
-            -222,
-            new Color(67, 77, 110)
+            326,
+            66,
+            145,
+            -168,
+            new Color(40, 98, 126, 246)
         );
+        this.redrawPanel(startBattleBtn, new Color(40, 98, 126, 246), true);
 
         const startLabel = this.createLabel(
             startBattleBtn,
             'Label',
-            '开始战斗',
+            '御剑出征   ›',
             0,
             0,
-            28,
-            Color.WHITE
+            27,
+            new Color(255, 238, 191)
         );
 
         const startTf = startLabel.node.getComponent(UITransform);
 
         if (startTf) {
-            startTf.setContentSize(300, 68);
+            startTf.setContentSize(326, 66);
         }
 
         const startBtn = startBattleBtn.addComponent(Button);
-        startBtn.transition = Button.Transition.NONE;
+        this.configureButton(startBtn);
 
         startBattleBtn.on(
             Button.EventType.CLICK,
@@ -485,11 +583,11 @@ export class MainUIBuilder extends Component {
         const bottomBar = this.createPanel(
             main,
             'BottomBar',
-            1280,
-            90,
+            1248,
+            94,
             0,
-            -315,
-            new Color(39, 45, 66)
+            -309,
+            new Color(13, 24, 45, 236)
         );
 
 
@@ -516,11 +614,21 @@ export class MainUIBuilder extends Component {
             const button = this.createPanel(
                 bottomBar,
                 name,
-                150,
-                68,
+                152,
+                74,
                 startX + i * gap,
                 0,
-                new Color(48, 55, 80)
+                new Color(27, 43, 70, 220)
+            );
+
+            this.createSprite(
+                button,
+                `${name}Icon`,
+                name,
+                42,
+                42,
+                0,
+                12
             );
 
 
@@ -533,16 +641,16 @@ export class MainUIBuilder extends Component {
                 'Label',
                 name,
                 0,
-                0,
-                22,
-                Color.WHITE
+                -25,
+                16,
+                new Color(213, 224, 235)
             );
 
             // 文字命中区缩到和按钮一致，避免遮挡相邻按钮
             const labelTransform = label.node.getComponent(UITransform);
 
             if (labelTransform) {
-                labelTransform.setContentSize(150, 68);
+                labelTransform.setContentSize(152, 28);
             }
 
 
@@ -553,7 +661,7 @@ export class MainUIBuilder extends Component {
             // =================================================
 
             const btn = button.addComponent(Button);
-            btn.transition = Button.Transition.NONE;
+            this.configureButton(btn);
 
             button.on(
                 Button.EventType.CLICK,
@@ -642,14 +750,28 @@ export class MainUIBuilder extends Component {
     updateButtonHighlight() {
 
         this.buttonMap.forEach((node, name) => {
+            const active = name === this.activePage;
 
-            const g = node.getComponent(Graphics);
+            this.redrawPanel(
+                node,
+                active
+                    ? new Color(42, 85, 111, 246)
+                    : new Color(27, 43, 70, 220),
+                active
+            );
 
-            if (g) {
+            const icon = node.getChildByName(`${name}Icon`)?.getComponent(Sprite);
+            if (icon) {
+                icon.color = active
+                    ? Color.WHITE
+                    : new Color(178, 199, 215);
+            }
 
-                g.fillColor = (name === this.activePage)
-                    ? new Color(78, 88, 126)
-                    : new Color(48, 55, 80);
+            const label = node.getChildByName('Label')?.getComponent(Label);
+            if (label) {
+                label.color = active
+                    ? new Color(251, 222, 153)
+                    : new Color(182, 201, 217);
             }
         });
     }
@@ -938,7 +1060,7 @@ export class MainUIBuilder extends Component {
             this.setLabelHitArea(upgradeLabel, 230, 52);
 
             const upgradeButtonComponent = upgradeButton.addComponent(Button);
-            upgradeButtonComponent.transition = Button.Transition.NONE;
+            this.configureButton(upgradeButtonComponent);
             upgradeButton.on(
                 Button.EventType.CLICK,
                 () => {
@@ -1173,7 +1295,7 @@ export class MainUIBuilder extends Component {
             this.setLabelHitArea(useLabel, 150, 40);
 
             const useButtonComponent = useButton.addComponent(Button);
-            useButtonComponent.transition = Button.Transition.NONE;
+            this.configureButton(useButtonComponent);
             useButtonComponent.interactable = item.quantity > 0;
             useButton.on(
                 Button.EventType.CLICK,
@@ -1278,7 +1400,7 @@ export class MainUIBuilder extends Component {
             }
 
             const buyBtn = buy.addComponent(Button);
-            buyBtn.transition = Button.Transition.NONE;
+            this.configureButton(buyBtn);
 
             buy.on(
                 Button.EventType.CLICK,
@@ -1428,27 +1550,201 @@ export class MainUIBuilder extends Component {
             0
         );
 
-
-        const graphics = node.addComponent(
-            Graphics
-        );
-
-
-        graphics.fillColor = color;
-
-
-        graphics.rect(
-            -width / 2,
-            -height / 2,
-            width,
-            height
-        );
-
-
-        graphics.fill();
+        node.addComponent(Graphics);
+        this.redrawPanel(node, color, false);
 
 
         return node;
+    }
+
+
+    private redrawPanel(node: Node, color: Color, highlighted: boolean): void {
+
+        const transform = node.getComponent(UITransform);
+        const graphics = node.getComponent(Graphics);
+
+        if (!transform || !graphics) {
+            return;
+        }
+
+        const width = transform.contentSize.width;
+        const height = transform.contentSize.height;
+
+        graphics.clear();
+
+        if (node.name === 'AtmosphereTint') {
+            graphics.fillColor = color;
+            graphics.rect(-width / 2, -height / 2, width, height);
+            graphics.fill();
+            return;
+        }
+
+        const radius = Math.min(18, Math.max(8, height * 0.18));
+        const fillAlpha = color.a < 255
+            ? color.a
+            : height > 120 ? 222 : 244;
+
+        // 向下的柔和投影让面板从背景中分离出来。
+        graphics.fillColor = new Color(2, 7, 18, height > 120 ? 78 : 115);
+        graphics.roundRect(
+            -width / 2 + 2,
+            -height / 2 - 4,
+            width - 4,
+            height,
+            radius
+        );
+        graphics.fill();
+
+        graphics.fillColor = new Color(color.r, color.g, color.b, fillAlpha);
+        graphics.roundRect(
+            -width / 2,
+            -height / 2,
+            width,
+            height,
+            radius
+        );
+        graphics.fill();
+
+        graphics.strokeColor = highlighted
+            ? new Color(224, 188, 101, 230)
+            : new Color(114, 145, 176, height > 120 ? 105 : 150);
+        graphics.lineWidth = highlighted ? 2.4 : 1.2;
+        graphics.roundRect(
+            -width / 2 + 1,
+            -height / 2 + 1,
+            width - 2,
+            height - 2,
+            Math.max(7, radius - 1)
+        );
+        graphics.stroke();
+
+        // 面板上沿的短高光使用国风牌匾式收口。
+        if (width > 180) {
+            graphics.strokeColor = highlighted
+                ? new Color(248, 218, 147, 205)
+                : new Color(137, 199, 215, 80);
+            graphics.lineWidth = 1;
+            graphics.moveTo(-Math.min(width * 0.28, 170), height / 2 - 4);
+            graphics.lineTo(Math.min(width * 0.28, 170), height / 2 - 4);
+            graphics.stroke();
+        }
+    }
+
+
+    private createSprite(
+        parent: Node,
+        name: string,
+        frameKey: string,
+        width: number,
+        height: number,
+        x: number,
+        y: number
+    ): Node | null {
+
+        const spriteFrame = this.artFrames.get(frameKey);
+        if (!spriteFrame) {
+            return null;
+        }
+
+        const node = this.createNode(parent, name, width, height);
+        node.setPosition(x, y, 0);
+
+        const sprite = node.addComponent(Sprite);
+        sprite.spriteFrame = spriteFrame;
+        sprite.sizeMode = Sprite.SizeMode.CUSTOM;
+        sprite.trim = false;
+
+        // 设置 SpriteFrame 时 Cocos 会先把节点恢复为贴图原始尺寸。
+        // 必须在绑定贴图之后重新指定显示尺寸，避免导航图标撑出按钮。
+        const transform = node.getComponent(UITransform);
+        if (transform) {
+            transform.setContentSize(width, height);
+        }
+
+        return node;
+    }
+
+
+    private configureButton(button: Button): void {
+        button.transition = Button.Transition.SCALE;
+        button.zoomScale = 0.94;
+        button.duration = 0.08;
+    }
+
+
+    private createStatusOrb(
+        parent: Node,
+        x: number,
+        y: number,
+        color: Color,
+        text: string,
+        radius = 20
+    ): Node {
+
+        const orb = this.createNode(parent, `${text}Orb`, radius * 2, radius * 2);
+        orb.setPosition(x, y, 0);
+
+        const graphics = orb.addComponent(Graphics);
+        graphics.fillColor = new Color(6, 16, 33, 245);
+        graphics.circle(0, 0, radius);
+        graphics.fill();
+        graphics.strokeColor = new Color(color.r, color.g, color.b, 220);
+        graphics.lineWidth = 2;
+        graphics.circle(0, 0, radius - 1);
+        graphics.stroke();
+        graphics.fillColor = new Color(color.r, color.g, color.b, 72);
+        graphics.circle(0, 0, radius - 5);
+        graphics.fill();
+
+        this.createLabel(
+            orb,
+            'Glyph',
+            text,
+            0,
+            0,
+            Math.max(12, radius - 3),
+            new Color(245, 237, 207)
+        );
+
+        return orb;
+    }
+
+
+    private drawFactionCore(core: Node): void {
+
+        const graphics = core.addComponent(Graphics);
+
+        graphics.fillColor = new Color(10, 24, 46, 224);
+        graphics.circle(0, 0, 108);
+        graphics.fill();
+
+        graphics.strokeColor = new Color(208, 176, 93, 170);
+        graphics.lineWidth = 2;
+        graphics.circle(0, 0, 108);
+        graphics.stroke();
+
+        graphics.strokeColor = new Color(83, 188, 215, 145);
+        graphics.lineWidth = 1.5;
+        graphics.circle(0, 0, 88);
+        graphics.stroke();
+        graphics.circle(0, 0, 72);
+        graphics.stroke();
+
+        // 三个能量节点对应战神、雷部、天王。
+        this.createStatusOrb(core, -88, 55, new Color(221, 111, 79), '战', 17);
+        this.createStatusOrb(core, 88, 55, new Color(90, 181, 246), '雷', 17);
+        this.createStatusOrb(core, 0, -102, new Color(96, 205, 153), '王', 17);
+
+        const star = this.createLabel(
+            core,
+            'CoreStar',
+            '✦',
+            0,
+            72,
+            32,
+            new Color(238, 205, 122)
+        );
+        this.setLabelHitArea(star, 60, 50);
     }
 
 
@@ -1546,29 +1842,43 @@ export class MainUIBuilder extends Component {
         y: number
     ) {
 
-        this.createLabel(
+        const branchColor = name === '战神'
+            ? new Color(218, 105, 76)
+            : name === '雷部'
+                ? new Color(82, 170, 239)
+                : new Color(86, 193, 139);
+
+        const row = this.createPanel(
             parent,
+            `${name}ProgressRow`,
+            220,
+            52,
+            x,
+            y,
+            new Color(22, 38, 62, 218)
+        );
+
+        this.createStatusOrb(row, -86, 0, branchColor, name.slice(0, 1), 15);
+
+        this.createLabel(
+            row,
             name + 'Name',
             name,
-            x - 55,
-            y,
-            22,
-            Color.WHITE
+            -38,
+            0,
+            20,
+            new Color(231, 232, 225)
         );
 
 
         this.createLabel(
-            parent,
+            row,
             name + 'Progress',
             progress,
-            x + 65,
-            y,
-            20,
-            new Color(
-                175,
-                180,
-                200
-            )
+            66,
+            0,
+            18,
+            new Color(branchColor.r, branchColor.g, branchColor.b)
         );
     }
 
