@@ -1,25 +1,28 @@
 import { _decorator, Component } from 'cc';
 
-import {
-    playerData,
-    addPlayerExp,
-    addGold,
-    updatePlayerPower
-} from './PlayerData';
-
+import { addGold } from './PlayerData';
 import { BattleUI } from './BattleUI';
+import type { EnemyViewData } from './BattleUI';
+
+import {
+    BattleCardSystem,
+    CardChoice
+} from './CardSystem';
+
+import { BattleRunData } from './BattleRunData';
+
+import {
+    BATTLE_BALANCE,
+    getWaveComposition
+} from './BattleBalance';
 
 const { ccclass } = _decorator;
 
-// =========================================================
-// 怪物数据结构
-// =========================================================
 
-export interface MonsterData {
-    name: string;
+export type EnemyType = 'melee' | 'ranged';
+
+export interface MonsterData extends EnemyViewData {
     level: number;
-    maxHp: number;
-    hp: number;
     def: number;
     atk: number;
     expReward: number;
@@ -27,186 +30,216 @@ export interface MonsterData {
 }
 
 
-// =========================================================
-// 妖兽工厂
-//
-// 等级越高，属性越强：
-//   Lv.1  HP 500  ATK 6  DEF 2
-//   Lv.2  HP 600  ATK 8  DEF 3
-//   Lv.3  HP 720  ATK 10 DEF 4
-// 经验 / 金币奖励第一版固定。
-// =========================================================
+export function createWaveEnemies(wave: number): MonsterData[] {
 
-export function createMonster(level: number): MonsterData {
+    const composition = getWaveComposition(wave);
+    const count = composition.total;
+    const meleeCount = composition.melee;
+    const enemies: MonsterData[] = [];
 
-    const hp = 500 + (level - 1) * 100;
+    for (let index = 0; index < count; index++) {
+        const type: EnemyType = index < meleeCount ? 'melee' : 'ranged';
+        const isBoss = wave === 10 && index === 0;
+        const baseHp = 10 + wave * 3;
+        const hp = isBoss ? 500 : baseHp;
 
-    return {
-        name: '妖兽',
-        level: level,
-        maxHp: hp,
-        hp: hp,
-        def: 1 + level,
-        atk: 4 + level * 2,
-        expReward: 50,
-        goldReward: 20
-    };
+        enemies.push({
+            id: wave * 1000 + index,
+            name: isBoss
+                ? '镇关妖王'
+                : type === 'melee'
+                    ? '近战妖兽'
+                    : '远程妖兽',
+            type,
+            isBoss,
+            level: wave,
+            maxHp: hp,
+            hp,
+            def: isBoss ? 5 + wave : Math.floor(wave / 4),
+            atk: isBoss
+                ? 12 + wave
+                : type === 'ranged'
+                    ? 4 + Math.floor(wave / 2)
+                    : 3 + Math.floor(wave / 3),
+            expReward: isBoss
+                ? BATTLE_BALANCE.bossExp
+                : BATTLE_BALANCE.normalEnemyExp,
+            goldReward: isBoss
+                ? BATTLE_BALANCE.bossGold
+                : BATTLE_BALANCE.normalEnemyGold
+        });
+    }
+
+    return enemies;
 }
 
-// =========================================================
-// 战斗逻辑
-//
-// 负责：玩家 / 怪物自动攻击、伤害结算、
-// 胜负判定、经验金币结算、Timer 的生命周期管理。
-// UI 更新全部委托给 BattleUI。
-// =========================================================
 
 @ccclass('BattleSystem')
 export class BattleSystem extends Component {
 
     private battleUI!: BattleUI;
-    private monster!: MonsterData;
+    private runData!: BattleRunData;
+    private cardSystem!: BattleCardSystem;
+    private enemies: MonsterData[] = [];
 
-    // 战斗中玩家当前 HP（不直接改 playerData.hp）
     private currentPlayerHp = 0;
-    private isOver = false;
+    private currentWave = 1;
+    private readonly totalWaves = 10;
+    private totalExpReward = 0;
+    private totalGoldReward = 0;
+    private pendingCardChoices = 0;
+    private attackCursor = 0;
+
+    private isPaused = false;
     private onExit: () => void = () => {};
 
 
-    // =====================================================
-    // 初始化
-    // =====================================================
-
-    init(
-        ui: BattleUI,
-        onExit: () => void
-    ): void {
+    init(ui: BattleUI, onExit: () => void): void {
 
         this.battleUI = ui;
         this.onExit = onExit;
-        this.monster = createMonster(1);
-        this.currentPlayerHp = playerData.hp;
-        this.isOver = false;
+        this.runData = new BattleRunData();
+        this.cardSystem = new BattleCardSystem();
 
-        this.battleUI.updatePlayerHp(
-            this.currentPlayerHp,
-            playerData.hp
-        );
+        this.currentWave = 1;
+        this.totalExpReward = 0;
+        this.totalGoldReward = 0;
+        this.pendingCardChoices = 0;
+        this.attackCursor = 0;
+        this.currentPlayerHp = this.runData.maxHp;
+        this.isPaused = false;
+        this.enemies = createWaveEnemies(this.currentWave);
 
-        this.battleUI.updateMonsterHp(
-            this.monster.hp,
-            this.monster.maxHp
-        );
-
-        this.battleUI.updateMonsterLevel(
-            this.monster.level
+        this.updateRunUI();
+        this.renderCurrentWave();
+        this.battleUI.updateSkillSlots([]);
+        this.battleUI.updateFactionProgress(
+            this.cardSystem.getProgressText()
         );
     }
 
-
-    // =====================================================
-    // 开始战斗
-    // =====================================================
 
     begin(): void {
-
-        this.battleUI.setStatus('自动战斗中...');
-        this.battleUI.addLog('战斗开始！');
-
-        // 玩家每 1 秒攻击一次
-        this.schedule(this.playerAttack, 1);
-        // 怪物每 2 秒攻击一次
-        this.schedule(this.monsterAttack, 2);
+        this.battleUI.setStatus('怪潮来袭 · 自动多目标攻击中');
+        this.battleUI.addLog(
+            `第1波：${this.enemies.length}只敌人同时进入战场！`
+        );
+        this.startCombatTimers();
     }
 
-
-    // =====================================================
-    // 停止所有 Timer（退出战斗 / 战斗结束时调用）
-    // =====================================================
 
     stop(): void {
         this.unschedule(this.playerAttack);
-        this.unschedule(this.monsterAttack);
+        this.unschedule(this.enemyGroupAttack);
+        this.unschedule(this.regeneratePlayer);
         this.unscheduleAllCallbacks();
     }
 
 
-    // =====================================================
-    // 玩家攻击
-    // =====================================================
+    private startCombatTimers(): void {
+
+        this.unschedule(this.playerAttack);
+        this.unschedule(this.enemyGroupAttack);
+        this.unschedule(this.regeneratePlayer);
+
+        this.schedule(this.playerAttack, this.runData.attackInterval);
+        this.schedule(this.enemyGroupAttack, 1.5);
+        this.schedule(this.regeneratePlayer, 1);
+    }
+
 
     private playerAttack = (): void => {
 
-        if (this.isOver) {
+        if (this.isPaused) {
             return;
         }
 
-        // 基础伤害 = 攻击 - 防御，并加入 90%~110% 随机浮动
-        const base = Math.max(
-            1,
-            playerData.atk - this.monster.def
-        );
+        const living = this.getLivingEnemies();
+        if (living.length === 0) {
+            return;
+        }
 
-        const damage = Math.max(
-            1,
-            Math.round(base * (0.9 + Math.random() * 0.2))
+        // 前期同时攻击3只；每4级增加1个目标，上限10只。
+        const targetCount = Math.min(
+            living.length,
+            this.getMultiTargetCount()
         );
+        const targets: MonsterData[] = [];
 
-        this.monster.hp = Math.max(
-            0,
-            this.monster.hp - damage
-        );
+        for (let i = 0; i < targetCount; i++) {
+            const index = (this.attackCursor + i) % living.length;
+            targets.push(living[index]);
+        }
+        this.attackCursor = (this.attackCursor + targetCount) % living.length;
 
-        this.battleUI.updateMonsterHp(
-            this.monster.hp,
-            this.monster.maxHp
-        );
-        this.battleUI.showDamage('monster', damage);
-        this.battleUI.playHit('monster');
-        this.battleUI.addLog(
-            `玩家对${this.monster.name}造成 ${damage} 点伤害`
-        );
+        let defeatedCount = 0;
 
-        if (this.monster.hp <= 0) {
-            this.onMonsterDead();
+        for (const target of targets) {
+            const base = Math.max(1, this.runData.atk - target.def);
+            const isCritical = Math.random() * 100 < this.runData.crit;
+            const damage = Math.max(
+                1,
+                Math.round(
+                    base *
+                    (isCritical ? this.runData.critDamageMultiplier : 1) *
+                    (0.9 + Math.random() * 0.2)
+                )
+            );
+
+            target.hp = Math.max(0, target.hp - damage);
+            this.battleUI.updateEnemyHp(target.id, target.hp, target.maxHp);
+            this.battleUI.showEnemyDamage(target.id, damage, isCritical);
+
+            if (target.hp <= 0) {
+                defeatedCount++;
+                this.resolveEnemyDefeat(target);
+            }
+        }
+
+        this.battleUI.playPlayerAttack(targets.map((target) => target.id));
+
+        if (defeatedCount > 0) {
+            this.afterEnemyDefeats();
         }
     };
 
 
-    // =====================================================
-    // 怪物攻击
-    // =====================================================
+    private enemyGroupAttack = (): void => {
 
-    private monsterAttack = (): void => {
-
-        if (this.isOver) {
+        if (this.isPaused) {
             return;
         }
 
-        const base = Math.max(
-            1,
-            this.monster.atk - playerData.def
-        );
+        const living = this.getLivingEnemies();
+        const meleeAttackers = living
+            .filter((enemy) => enemy.type === 'melee')
+            .slice(0, 4);
+        const rangedAttackers = living
+            .filter((enemy) => enemy.type === 'ranged')
+            .slice(0, 2);
+        const attackers = [...meleeAttackers, ...rangedAttackers];
 
-        const damage = Math.max(
-            1,
-            Math.round(base * (0.9 + Math.random() * 0.2))
-        );
+        let totalDamage = 0;
+
+        for (const attacker of attackers) {
+            totalDamage += Math.max(
+                1,
+                Math.round(
+                    Math.max(1, attacker.atk - this.runData.def) *
+                    (0.9 + Math.random() * 0.2)
+                )
+            );
+        }
 
         this.currentPlayerHp = Math.max(
             0,
-            this.currentPlayerHp - damage
+            this.currentPlayerHp - totalDamage
         );
-
         this.battleUI.updatePlayerHp(
             this.currentPlayerHp,
-            playerData.hp
+            this.runData.maxHp
         );
-        this.battleUI.showDamage('player', damage);
-        this.battleUI.playHit('player');
-        this.battleUI.addLog(
-            `${this.monster.name}对玩家造成 ${damage} 点伤害`
-        );
+        this.battleUI.showPlayerDamage(totalDamage);
 
         if (this.currentPlayerHp <= 0) {
             this.onPlayerDead();
@@ -214,118 +247,290 @@ export class BattleSystem extends Component {
     };
 
 
-    // =====================================================
-    // 怪物死亡
-    // =====================================================
+    private regeneratePlayer = (): void => {
 
-    private onMonsterDead(): void {
-
-        if (this.isOver) {
+        if (this.isPaused || this.runData.healthRegenBonus <= 0) {
             return;
         }
 
-        this.isOver = true;
-        this.stop();
+        const amount = Math.max(
+            1,
+            Math.round(
+                this.runData.maxHp * 0.01 *
+                (1 + this.runData.healthRegenBonus / 100)
+            )
+        );
+        this.currentPlayerHp = Math.min(
+            this.runData.maxHp,
+            this.currentPlayerHp + amount
+        );
+        this.battleUI.updatePlayerHp(
+            this.currentPlayerHp,
+            this.runData.maxHp
+        );
+    };
 
-        // 结算奖励（复用现有经验 / 金币系统）
-        addPlayerExp(this.monster.expReward);
-        addGold(this.monster.goldReward);
-        updatePlayerPower();
 
-        this.battleUI.addLog(`${this.monster.name}被击败！`);
-        this.battleUI.addLog(`获得经验 +${this.monster.expReward}`);
-        this.battleUI.addLog(`获得金币 +${this.monster.goldReward}`);
-        this.battleUI.showVictory(
-            this.monster.expReward,
-            this.monster.goldReward,
-            () => this.restartNext(),
-            this.onExit
+    private resolveEnemyDefeat(enemy: MonsterData): void {
+
+        const previousMaxHp = this.runData.maxHp;
+        this.pendingCardChoices += this.runData.addExp(enemy.expReward);
+        this.currentPlayerHp += Math.max(
+            0,
+            this.runData.maxHp - previousMaxHp
+        );
+
+        addGold(enemy.goldReward);
+        this.totalExpReward += enemy.expReward;
+        this.totalGoldReward += enemy.goldReward;
+
+        const progress = this.cardSystem.recordKill();
+        for (const bonus of progress.bonuses) {
+            const oldMaxHp = this.runData.maxHp;
+            this.runData.applyBonus(bonus);
+            this.currentPlayerHp += Math.max(0, this.runData.maxHp - oldMaxHp);
+        }
+        for (const message of progress.messages) {
+            this.battleUI.addLog(message);
+        }
+
+        this.battleUI.removeEnemy(enemy.id);
+    }
+
+
+    private afterEnemyDefeats(): void {
+
+        this.updateRunUI();
+        this.battleUI.updateSkillSlots(
+            this.cardSystem.getSlotDescriptions()
+        );
+        this.battleUI.updateFactionProgress(
+            this.cardSystem.getProgressText()
+        );
+        this.battleUI.updateWave(
+            this.currentWave,
+            this.totalWaves,
+            this.getLivingEnemies().length
+        );
+
+        if (this.pendingCardChoices > 0) {
+            this.pauseCombat();
+            this.showNextCardChoice();
+            return;
+        }
+
+        if (this.getLivingEnemies().length === 0) {
+            this.pauseCombat();
+            this.finishWave();
+        }
+    }
+
+
+    private showNextCardChoice(): void {
+
+        const choices = this.cardSystem.getChoices(3);
+
+        if (choices.length === 0) {
+            this.pendingCardChoices = 0;
+            this.resumeAfterChoices();
+            return;
+        }
+
+        this.battleUI.setStatus(
+            `局内 Lv.${this.runData.level} · 选择成长路线`
+        );
+        this.battleUI.showCardChoices(
+            choices,
+            (choice) => this.onCardSelected(choice)
         );
     }
 
 
-    // =====================================================
-    // 玩家死亡
-    // =====================================================
+    private onCardSelected(choice: CardChoice): void {
+
+        const result = this.cardSystem.selectCard(choice.id);
+
+        if (!result.success) {
+            this.battleUI.addLog(result.message);
+            this.showNextCardChoice();
+            return;
+        }
+
+        if (result.bonus) {
+            const oldMaxHp = this.runData.maxHp;
+            this.runData.applyBonus(result.bonus);
+            this.currentPlayerHp += Math.max(0, this.runData.maxHp - oldMaxHp);
+        }
+
+        this.pendingCardChoices--;
+        this.battleUI.addLog(result.message);
+        this.battleUI.updateSkillSlots(
+            this.cardSystem.getSlotDescriptions()
+        );
+        this.updateRunUI();
+
+        if (this.pendingCardChoices > 0) {
+            this.showNextCardChoice();
+        } else {
+            this.resumeAfterChoices();
+        }
+    }
+
+
+    private resumeAfterChoices(): void {
+
+        if (this.getLivingEnemies().length === 0) {
+            this.finishWave();
+            return;
+        }
+
+        this.isPaused = false;
+        this.battleUI.setStatus(
+            `自动攻击 ${this.getMultiTargetCount()} 个目标 · 怪物剩余 ${this.getLivingEnemies().length}`
+        );
+        this.startCombatTimers();
+    }
+
+
+    private finishWave(): void {
+
+        if (this.currentWave >= this.totalWaves) {
+            this.finishStage();
+            return;
+        }
+
+        this.battleUI.setStatus('怪潮清空，下一波即将抵达……');
+        this.scheduleOnce(() => this.startNextWave(), 0.7);
+    }
+
+
+    private startNextWave(): void {
+
+        this.currentWave++;
+        this.enemies = createWaveEnemies(this.currentWave);
+        this.attackCursor = 0;
+        this.isPaused = false;
+
+        this.renderCurrentWave();
+        this.battleUI.addLog(
+            `第${this.currentWave}波：${this.enemies.length}只敌人同时出现！`
+        );
+        this.battleUI.setStatus(
+            `自动攻击 ${this.getMultiTargetCount()} 个目标 · 怪物剩余 ${this.enemies.length}`
+        );
+        this.startCombatTimers();
+    }
+
 
     private onPlayerDead(): void {
 
-        if (this.isOver) {
+        if (this.isPaused) {
             return;
         }
 
-        this.isOver = true;
-        this.stop();
-
-        this.battleUI.addLog('玩家被击败......');
+        this.pauseCombat();
+        this.battleUI.addLog('玩家被怪潮击败……');
         this.battleUI.showDefeat(
-            () => this.restart(),
+            () => this.retryRemainingWave(),
             this.onExit
         );
     }
 
 
-    // =====================================================
-    // 重新挑战（失败以后）
-    // =====================================================
-
-    private restart(): void {
+    private retryRemainingWave(): void {
 
         this.battleUI.resetForRestart();
+        this.currentPlayerHp = this.runData.maxHp;
+        this.isPaused = false;
 
-        // 重置 HP，不扣任何资源
-        this.monster.hp = this.monster.maxHp;
-        this.currentPlayerHp = playerData.hp;
-
-        this.battleUI.updatePlayerHp(
-            this.currentPlayerHp,
-            playerData.hp
-        );
-        this.battleUI.updateMonsterHp(
-            this.monster.hp,
-            this.monster.maxHp
-        );
-
-        this.isOver = false;
-        this.battleUI.setStatus('自动战斗中...');
-        this.battleUI.addLog('重新挑战！');
-
-        this.schedule(this.playerAttack, 1);
-        this.schedule(this.monsterAttack, 2);
+        this.updateRunUI();
+        this.battleUI.addLog('恢复生命，继续清理本波剩余怪物！');
+        this.startCombatTimers();
     }
 
 
-    // =====================================================
-    // 继续战斗（胜利以后）
-    //
-    // 生成下一只更高等级的妖兽，重新开始自动战斗。
-    // =====================================================
+    private finishStage(): void {
 
-    private restartNext(): void {
+        this.pauseCombat();
+        this.battleUI.addLog('十波怪潮全部清空！');
+        this.battleUI.showVictory(
+            this.totalExpReward,
+            this.totalGoldReward,
+            () => this.restartStage(),
+            this.onExit
+        );
+    }
+
+
+    private restartStage(): void {
 
         this.battleUI.resetForRestart();
+        this.currentWave = 1;
+        this.totalExpReward = 0;
+        this.totalGoldReward = 0;
+        this.pendingCardChoices = 0;
+        this.attackCursor = 0;
+        this.currentPlayerHp = this.runData.maxHp;
+        this.enemies = createWaveEnemies(1);
+        this.isPaused = false;
 
-        // 下一只妖兽等级 +1
-        this.monster = createMonster(this.monster.level + 1);
-        this.currentPlayerHp = playerData.hp;
+        this.updateRunUI();
+        this.renderCurrentWave();
+        this.battleUI.addLog('保留本局构筑，开始下一轮怪潮！');
+        this.startCombatTimers();
+    }
 
-        this.battleUI.updateMonsterLevel(this.monster.level);
+
+    private pauseCombat(): void {
+        this.isPaused = true;
+        this.stop();
+    }
+
+
+    private getLivingEnemies(): MonsterData[] {
+        return this.enemies.filter((enemy) => enemy.hp > 0);
+    }
+
+
+    private getMultiTargetCount(): number {
+        return Math.min(
+            BATTLE_BALANCE.maxTargetCount,
+            BATTLE_BALANCE.baseTargetCount +
+            Math.floor(
+                (this.runData.level - 1) /
+                BATTLE_BALANCE.levelsPerExtraTarget
+            )
+        );
+    }
+
+
+    private updateRunUI(): void {
+        this.currentPlayerHp = Math.min(
+            this.currentPlayerHp,
+            this.runData.maxHp
+        );
+        this.battleUI.updatePlayerRunInfo(
+            this.runData.level,
+            this.runData.exp,
+            this.runData.expToNextLevel,
+            this.runData.atk,
+            this.runData.def,
+            this.runData.crit,
+            `${this.runData.secondaryStatsText} · 多目标 ${this.getMultiTargetCount()}`
+        );
         this.battleUI.updatePlayerHp(
             this.currentPlayerHp,
-            playerData.hp
+            this.runData.maxHp
         );
-        this.battleUI.updateMonsterHp(
-            this.monster.hp,
-            this.monster.maxHp
-        );
+    }
 
-        this.isOver = false;
-        this.battleUI.setStatus('自动战斗中...');
-        this.battleUI.addLog(
-            `新的敌人 ${this.monster.name} Lv.${this.monster.level} 出现！`
-        );
 
-        this.schedule(this.playerAttack, 1);
-        this.schedule(this.monsterAttack, 2);
+    private renderCurrentWave(): void {
+        this.battleUI.showEnemyGroup(this.enemies);
+        this.battleUI.updateWave(
+            this.currentWave,
+            this.totalWaves,
+            this.enemies.length
+        );
     }
 }

@@ -8,13 +8,25 @@ import {
     Graphics,
     Button,
     view,
+    macro,
     ResolutionPolicy
 } from 'cc';
 
 import {
-    playerData,
-    addPlayerExp
+    playerData
 } from './PlayerData';
+
+import {
+    buyItem,
+    getInventoryItems,
+    useItem
+} from './InventoryData';
+
+import {
+    getArtifactBonusText,
+    getArtifacts,
+    upgradeArtifact
+} from './ArtifactData';
 
 import {
     BattleUI
@@ -35,16 +47,29 @@ export class MainUIBuilder extends Component {
     private battleRoot: Node | null = null;
     private battleSystem: BattleSystem | null = null;
 
+    private shopMessage = '';
+    private bagMessage = '';
+    private artifactMessage = '';
+
     start() {
 
         // =====================================================
-        // 横屏设计分辨率
+        // 手机 Web 预览横屏与分辨率适配
         // =====================================================
+
+        // 竖屏扫码打开时，Web 端会用 CSS 自动旋转 Canvas。
+        view.setOrientation(
+            macro.ORIENTATION_LANDSCAPE
+        );
+
+        // 浏览器工具栏收起、横竖屏切换后重新计算 Canvas 尺寸。
+        view.resizeWithBrowserSize(true);
 
         view.setDesignResolutionSize(
             1280,
             720,
-            ResolutionPolicy.FIXED_HEIGHT
+            // 保证整个 1280×720 界面始终完整可见，避免左右裁切。
+            ResolutionPolicy.SHOW_ALL
         );
 
         this.build();
@@ -55,7 +80,7 @@ export class MainUIBuilder extends Component {
     // 构建主界面
     // =====================================================
 
-    build() {
+    build(initialPage = '主页') {
 
         this.clearChildren(this.node);
 
@@ -174,10 +199,11 @@ export class MainUIBuilder extends Component {
 
 
         // =====================================================
-        // 默认显示首页
+        // 显示当前页面。重建界面时也能保留用户所在页并刷新顶部数据。
         // =====================================================
 
-        this.showHomePage(content);
+        this.activePage = initialPage;
+        this.showPage(content, initialPage);
 
 
         // =====================================================
@@ -186,8 +212,6 @@ export class MainUIBuilder extends Component {
 
         this.createBottomBar(main);
 
-        // 默认显示首页，并高亮“主页”
-        this.activePage = '首页';
         this.updateButtonHighlight();
     }
 
@@ -573,59 +597,41 @@ export class MainUIBuilder extends Component {
         }
 
 
+        this.activePage = name;
+        this.showPage(content, name);
+        this.updateButtonHighlight();
+    }
+
+
+    // =====================================================
+    // 统一页面切换
+    // =====================================================
+
+    private showPage(content: Node, name: string): void {
+
         switch (name) {
-
-            case '主页':
-
-                this.showHomePage(content);
-
-                break;
-
-
             case '角色':
-
                 this.showRolePage(content);
-
                 break;
-
-
             case '神器':
-
                 this.showArtifactPage(content);
-
                 break;
-
-
             case '图鉴':
-
                 this.showCollectionPage(content);
-
                 break;
-
-
             case '背包':
-
                 this.showBagPage(content);
-
                 break;
-
-
             case '商店':
-
                 this.showShopPage(content);
-
                 break;
-
-
             case '成就':
-
                 this.showAchievementPage(content);
-
+                break;
+            default:
+                this.showHomePage(content);
                 break;
         }
-
-        this.activePage = name;
-        this.updateButtonHighlight();
     }
 
 
@@ -707,7 +713,7 @@ export class MainUIBuilder extends Component {
 
         // 重建主界面：自动刷新顶部等级 / 战力 / 金币，
         // 并回到首页（不残留战斗 Timer，BattleRoot 一并销毁）
-        this.build();
+        this.build('主页');
     }
 
 
@@ -829,63 +835,15 @@ export class MainUIBuilder extends Component {
         this.createLabel(cultCard, 'Exp', `经验 ${playerData.exp} / ${playerData.expToNextLevel}`, 280, -10, 28, new Color(235, 205, 120));
 
 
-        // =================================================
-        // +100 经验 按钮
-        //
-        // 点击后增加经验并刷新角色页面
-        // =================================================
-
-        const expButton = this.createPanel(
+        this.createLabel(
             page,
-            'ExpButton',
-            220,
-            50,
+            'RoleHint',
+            '通过战斗获得金币，在商店购买修炼丹后可于背包中使用。',
             0,
             -212,
-            new Color(52, 59, 84)
+            19,
+            new Color(180, 185, 205)
         );
-
-        const expLabel = this.createLabel(
-            expButton,
-            'Label',
-            '+100 经验',
-            0,
-            0,
-            26,
-            Color.WHITE
-        );
-
-        const expTf = expLabel.node.getComponent(UITransform);
-
-        if (expTf) {
-            expTf.setContentSize(220, 50);
-        }
-
-        const expBtn = expButton.addComponent(Button);
-        expBtn.transition = Button.Transition.NONE;
-
-        expButton.on(
-            Button.EventType.CLICK,
-            () => {
-
-                console.log('获得 100 经验');
-
-                addPlayerExp(100);
-
-                this.refreshRolePage(content);
-            }
-        );
-    }
-
-
-    // =====================================================
-    // 刷新角色页面
-    // =====================================================
-
-    refreshRolePage(content: Node) {
-
-        // 重新构建前先清空，避免重复叠加
-        this.showRolePage(content);
     }
 
 
@@ -918,16 +876,16 @@ export class MainUIBuilder extends Component {
             Color.WHITE
         );
 
-
-        // 三个神器槽位
-        const slotNames = ['神器 1', '神器 2', '神器 3'];
+        const artifacts = getArtifacts();
         const slotX = [-400, 0, 400];
 
-        for (let i = 0; i < slotNames.length; i++) {
+        for (let i = 0; i < artifacts.length; i++) {
+
+            const artifact = artifacts[i];
 
             const slot = this.createPanel(
                 page,
-                'Slot_' + (i + 1),
+                'Slot_' + artifact.id,
                 340,
                 250,
                 slotX[i],
@@ -935,15 +893,62 @@ export class MainUIBuilder extends Component {
                 new Color(31, 36, 54)
             );
 
-            this.createLabel(slot, 'Name', slotNames[i], 0, 90, 28, Color.WHITE);
-            this.createLabel(slot, 'Equip', '未装备', 0, 50, 22, new Color(180, 185, 205));
-            this.createLine(slot, 0, 10, 280, new Color(70, 76, 98));
-            this.createLabel(slot, 'Atk', '攻击 +0', 0, -35, 24, Color.WHITE);
-            this.createLabel(slot, 'Def', '防御 +0', 0, -75, 24, Color.WHITE);
+            this.createLabel(slot, 'Name', artifact.name, 0, 90, 28, Color.WHITE);
+            this.createLabel(
+                slot,
+                'Level',
+                artifact.level > 0 ? `Lv.${artifact.level}` : '未激活',
+                0,
+                52,
+                21,
+                artifact.level > 0
+                    ? new Color(235, 205, 120)
+                    : new Color(180, 185, 205)
+            );
+            this.createLine(slot, 0, 20, 280, new Color(70, 76, 98));
+            this.createLabel(
+                slot,
+                'Bonus',
+                getArtifactBonusText(artifact),
+                0,
+                -10,
+                19,
+                Color.WHITE
+            );
+
+            const upgradeButton = this.createPanel(
+                slot,
+                'UpgradeButton',
+                230,
+                52,
+                0,
+                -78,
+                new Color(52, 59, 84)
+            );
+
+            const upgradeLabel = this.createLabel(
+                upgradeButton,
+                'Label',
+                `${artifact.level === 0 ? '激活' : '强化'} · ${artifact.upgradeCost} 金币`,
+                0,
+                0,
+                20,
+                Color.WHITE
+            );
+            this.setLabelHitArea(upgradeLabel, 230, 52);
+
+            const upgradeButtonComponent = upgradeButton.addComponent(Button);
+            upgradeButtonComponent.transition = Button.Transition.NONE;
+            upgradeButton.on(
+                Button.EventType.CLICK,
+                () => {
+                    const result = upgradeArtifact(artifact.id);
+                    this.artifactMessage = result.message;
+                    this.build('神器');
+                }
+            );
         }
 
-
-        // 神器强化区
         const strengthen = this.createPanel(
             page,
             'Strengthen',
@@ -954,9 +959,32 @@ export class MainUIBuilder extends Component {
             new Color(31, 36, 54)
         );
 
-        this.createLabel(strengthen, 'StTitle', '神器强化', -430, 35, 28, Color.WHITE);
-        this.createLabel(strengthen, 'StLevel', '当前等级 Lv.1', -430, -10, 22, new Color(180, 185, 205));
-        this.createLabel(strengthen, 'StCost', '强化需要：金币 100', 200, -10, 24, new Color(235, 205, 120));
+        const activeCount = artifacts.filter((artifact) => artifact.level > 0).length;
+        const totalLevels = artifacts.reduce((total, artifact) => {
+            return total + artifact.level;
+        }, 0);
+
+        this.createLabel(strengthen, 'StTitle', '神器共鸣', -430, 35, 28, Color.WHITE);
+        this.createLabel(
+            strengthen,
+            'StLevel',
+            `已激活 ${activeCount} / ${artifacts.length} · 总等级 ${totalLevels}`,
+            -330,
+            -10,
+            22,
+            new Color(180, 185, 205)
+        );
+        this.createLabel(
+            strengthen,
+            'StMessage',
+            this.artifactMessage || '激活和强化会永久增加角色属性与战力。',
+            250,
+            -10,
+            21,
+            this.artifactMessage
+                ? new Color(235, 205, 120)
+                : new Color(180, 185, 205)
+        );
     }
 
 
@@ -1077,17 +1105,18 @@ export class MainUIBuilder extends Component {
         this.createLabel(
             page,
             'Capacity',
-            '容量 0 / 100',
+            `容量 ${getInventoryItems().filter((item) => item.quantity > 0).length} / 100`,
             0,
             180,
             24,
             new Color(180, 185, 205)
         );
 
-
-        // 8 个物品格（4 列 x 2 行）
+        // 道具格（4 列 x 2 行）。当前只展示已定义的道具，
+        // 后续增加装备、材料时可继续沿用这个网格。
         const cellX = [-450, -150, 150, 450];
         const cellY = [40, -110];
+        const items = getInventoryItems();
 
         for (let i = 0; i < 8; i++) {
 
@@ -1104,26 +1133,69 @@ export class MainUIBuilder extends Component {
                 new Color(31, 36, 54)
             );
 
-            this.createLabel(cell, 'Empty', '空', 0, 0, 26, new Color(120, 125, 145));
-        }
+            const item = items[i];
 
+            if (!item) {
+                this.createLabel(cell, 'Empty', '空', 0, 0, 26, new Color(120, 125, 145));
+                continue;
+            }
 
-        // 分类（暂不筛选）
-        const tabs = ['全部', '装备', '材料', '道具'];
-        const tabX = [-450, -150, 150, 450];
-
-        for (let i = 0; i < tabs.length; i++) {
-
+            this.createLabel(cell, 'ItemName', item.name, 0, 42, 24, Color.WHITE);
             this.createLabel(
-                page,
-                'Tab_' + tabs[i],
-                tabs[i],
-                tabX[i],
-                -215,
-                22,
-                new Color(180, 185, 205)
+                cell,
+                'ItemCount',
+                `数量 ×${item.quantity}`,
+                0,
+                5,
+                20,
+                new Color(235, 205, 120)
+            );
+
+            const useButton = this.createPanel(
+                cell,
+                'UseButton',
+                150,
+                40,
+                0,
+                -42,
+                new Color(52, 59, 84)
+            );
+
+            const useLabel = this.createLabel(
+                useButton,
+                'Label',
+                '使用',
+                0,
+                0,
+                20,
+                Color.WHITE
+            );
+            this.setLabelHitArea(useLabel, 150, 40);
+
+            const useButtonComponent = useButton.addComponent(Button);
+            useButtonComponent.transition = Button.Transition.NONE;
+            useButtonComponent.interactable = item.quantity > 0;
+            useButton.on(
+                Button.EventType.CLICK,
+                () => {
+                    const result = useItem(item.id);
+                    this.bagMessage = result.message;
+                    this.build('背包');
+                }
             );
         }
+
+        this.createLabel(
+            page,
+            'BagMessage',
+            this.bagMessage || '修炼丹可在商店用金币购买。',
+            0,
+            -215,
+            20,
+            this.bagMessage
+                ? new Color(235, 205, 120)
+                : new Color(180, 185, 205)
+        );
     }
 
 
@@ -1157,13 +1229,17 @@ export class MainUIBuilder extends Component {
         );
 
 
-        // 三个商品卡
+        // 商店商品。先提供一个完整的战斗资源闭环商品，
+        // 其他类型会随神器、宝箱系统接入。
         const products = [
-            { name: '金币礼包', desc: '获得 1000 金币', price: '价格：10 钻石' },
-            { name: '修炼丹', desc: '经验 +100', price: '价格：100 金币' },
-            { name: '普通宝箱', desc: '随机获得道具', price: '价格：50 金币' }
+            {
+                id: 'cultivation-pill',
+                name: '修炼丹',
+                desc: '背包使用后获得 50 经验',
+                price: 20
+            }
         ];
-        const prodX = [-400, 0, 400];
+        const prodX = [0];
 
         for (let i = 0; i < products.length; i++) {
 
@@ -1172,7 +1248,7 @@ export class MainUIBuilder extends Component {
             const card = this.createPanel(
                 page,
                 'Product_' + p.name,
-                360,
+                460,
                 330,
                 prodX[i],
                 20,
@@ -1181,7 +1257,7 @@ export class MainUIBuilder extends Component {
 
             this.createLabel(card, 'ProdName', p.name, 0, 130, 28, Color.WHITE);
             this.createLabel(card, 'ProdDesc', p.desc, 0, 80, 22, new Color(180, 185, 205));
-            this.createLabel(card, 'ProdPrice', p.price, 0, 30, 24, new Color(235, 205, 120));
+            this.createLabel(card, 'ProdPrice', `价格：${p.price} 金币`, 0, 30, 24, new Color(235, 205, 120));
 
             // 购买按钮（真正的 Button）
             const buy = this.createPanel(
@@ -1207,10 +1283,24 @@ export class MainUIBuilder extends Component {
             buy.on(
                 Button.EventType.CLICK,
                 () => {
-                    console.log('购买：' + p.name);
+                    const result = buyItem(p.id);
+                    this.shopMessage = result.message;
+                    this.build('商店');
                 }
             );
         }
+
+        this.createLabel(
+            page,
+            'ShopMessage',
+            this.shopMessage || '战斗胜利可获得金币。',
+            0,
+            -205,
+            20,
+            this.shopMessage
+                ? new Color(235, 205, 120)
+                : new Color(180, 185, 205)
+        );
     }
 
 
@@ -1427,6 +1517,20 @@ export class MainUIBuilder extends Component {
 
 
         return label;
+    }
+
+
+    // =====================================================
+    // 让文字节点的命中区域与按钮一致，避免文字拦截相邻按钮。
+    // =====================================================
+
+    private setLabelHitArea(label: Label, width: number, height: number): void {
+
+        const transform = label.node.getComponent(UITransform);
+
+        if (transform) {
+            transform.setContentSize(width, height);
+        }
     }
 
 
