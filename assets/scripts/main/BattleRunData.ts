@@ -1,35 +1,28 @@
-import { playerData } from './PlayerData';
 import { BATTLE_BALANCE } from './BattleBalance';
+import type { StatModifier } from './GameData/EffectData';
+import {
+    gamePlayerData
+} from './GameData/PlayerData';
+import type {
+    PlayerAttributes
+} from './GameData/PlayerData';
+import {
+    BATTLE_RUN_LEVEL_POLICY,
+    PlayerLevelSystem
+} from './Systems/PlayerLevelSystem';
 
 
-export interface RunStatBonus {
-    hp?: number;
-    atk?: number;
-    def?: number;
-    crit?: number;
-    attackPercent?: number;
-    hpPercent?: number;
-    defPercent?: number;
-    attackSpeedPercent?: number;
-    critDamagePercent?: number;
-    attackRangePercent?: number;
-    skillDamagePercent?: number;
-    healthRegenPercent?: number;
-}
+// 旧类型名保留，实际结构已经上移到共享数据层。
+export type RunStatBonus = StatModifier;
 
 
-// 每次进入关卡都会创建新的 BattleRunData。
-// 它只保存本局等级、经验和属性，不会修改局外 PlayerData。
+// 每次进入关卡创建一份运行时状态，不会直接改写局外 PlayerData。
 export class BattleRunData {
 
-    level = 1;
-    exp = 0;
+    playerLevel = 1;
+    playerExp = 0;
     expToNextLevel: number = BATTLE_BALANCE.initialRunLevelExp;
-
-    private baseMaxHp: number;
-    private baseAtk: number;
-    private baseDef: number;
-    private baseCrit: number;
+    attributes: PlayerAttributes;
 
     private attackPercent = 0;
     private hpPercent = 0;
@@ -41,57 +34,43 @@ export class BattleRunData {
     private healthRegenPercent = 0;
 
 
-    constructor() {
-        this.baseMaxHp = playerData.hp;
-        this.baseAtk = playerData.atk;
-        this.baseDef = playerData.def;
-        this.baseCrit = playerData.crit;
+    constructor(initialAttributes: PlayerAttributes = gamePlayerData.attributes) {
+        this.attributes = { ...initialAttributes };
     }
 
 
+    // 兼容旧字段名。
+    get level(): number {
+        return this.playerLevel;
+    }
+
+    set level(value: number) {
+        this.playerLevel = value;
+    }
+
+    get exp(): number {
+        return this.playerExp;
+    }
+
+    set exp(value: number) {
+        this.playerExp = value;
+    }
+
+
+    // 兼容旧调用；新 BattleSystem 直接调用 PlayerLevelSystem。
     addExp(amount: number): number {
-
-        if (amount <= 0) {
-            return 0;
-        }
-
-        this.exp += amount;
-        let levelsGained = 0;
-
-        while (this.exp >= this.expToNextLevel) {
-            this.exp -= this.expToNextLevel;
-            this.level++;
-            levelsGained++;
-
-            // 局内升级自带小幅属性成长，保证前期节奏明显。
-            this.baseMaxHp += 10;
-            this.baseAtk += 1;
-
-            if (this.level % 2 === 0) {
-                this.baseDef += 1;
-            }
-            if (this.level % 5 === 0) {
-                this.baseCrit += 1;
-            }
-
-            // 前五级升级极快，之后逐步增加，但上限仅为50经验。
-            this.expToNextLevel = Math.min(
-                BATTLE_BALANCE.maxRunLevelExp,
-                BATTLE_BALANCE.initialRunLevelExp +
-                (this.level - 1) * BATTLE_BALANCE.runLevelExpGrowth
-            );
-        }
-
-        return levelsGained;
+        return new PlayerLevelSystem(
+            this,
+            BATTLE_RUN_LEVEL_POLICY
+        ).addExp(amount).levelsGained;
     }
 
 
     applyBonus(bonus: RunStatBonus): void {
-
-        this.baseMaxHp += Math.max(0, bonus.hp ?? 0);
-        this.baseAtk += Math.max(0, bonus.atk ?? 0);
-        this.baseDef += Math.max(0, bonus.def ?? 0);
-        this.baseCrit += Math.max(0, bonus.crit ?? 0);
+        this.attributes.hp += Math.max(0, bonus.hp ?? 0);
+        this.attributes.atk += Math.max(0, bonus.atk ?? 0);
+        this.attributes.def += Math.max(0, bonus.def ?? 0);
+        this.attributes.crit += Math.max(0, bonus.crit ?? 0);
 
         this.attackPercent += Math.max(0, bonus.attackPercent ?? 0);
         this.hpPercent += Math.max(0, bonus.hpPercent ?? 0);
@@ -105,19 +84,19 @@ export class BattleRunData {
 
 
     get maxHp(): number {
-        return Math.round(this.baseMaxHp * (1 + this.hpPercent / 100));
+        return Math.round(this.attributes.hp * (1 + this.hpPercent / 100));
     }
 
     get atk(): number {
-        return Math.round(this.baseAtk * (1 + this.attackPercent / 100));
+        return Math.round(this.attributes.atk * (1 + this.attackPercent / 100));
     }
 
     get def(): number {
-        return Math.round(this.baseDef * (1 + this.defPercent / 100));
+        return Math.round(this.attributes.def * (1 + this.defPercent / 100));
     }
 
     get crit(): number {
-        return this.baseCrit;
+        return this.attributes.crit;
     }
 
     get critDamageMultiplier(): number {
