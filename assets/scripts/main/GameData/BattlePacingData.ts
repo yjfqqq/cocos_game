@@ -11,17 +11,17 @@ export interface EliteBattleConfig {
 }
 
 export const BATTLE_PACING = {
-    totalDurationSeconds: 10 * 60,
-    waveDurationSeconds: 60,
-    spawnIntervalSeconds: 10,
-    eliteSpawnSeconds: [3 * 60, 6 * 60],
-    bossSpawnSecond: 9 * 60,
+    totalDurationSeconds: 5 * 60,
+    waveDurationSeconds: 30,
+    spawnIntervalSeconds: 5,
+    eliteSpawnSeconds: [90, 210],
+    bossSpawnSecond: 270,
     normalSkillExpReward: 1,
     bossSkillExpReward: 30,
     elite: {
-        hpMultiplier: 6,
-        attackMultiplier: 2,
-        defenseBonus: 3,
+        hpMultiplier: 4.5,
+        attackMultiplier: 1.6,
+        defenseBonus: 2,
         expReward: 25,
         goldReward: 10,
         skillExpReward: 15

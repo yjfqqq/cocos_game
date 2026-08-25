@@ -12,29 +12,46 @@ import {
     getNormalPackStartIndex
 } from './GameData/BattlePacingData';
 import {
-    CardSystem
-} from './Systems/CardSystem';
-import {
     BattlePacingSystem
 } from './Systems/BattlePacingSystem';
 import type {
     BattlePacingEvent
 } from './Systems/BattlePacingSystem';
-import type { CardChoice } from './Systems/CardSystem';
 import { EquipmentSystem } from './Systems/EquipmentSystem';
-import { FactionSystem } from './Systems/FactionSystem';
 import {
-    BATTLE_RUN_LEVEL_POLICY,
-    PlayerLevelSystem
-} from './Systems/PlayerLevelSystem';
-import { SkillSystem } from './Systems/SkillSystem';
+    DEFAULT_BATTLE_BUILD,
+    createBattleBuildRuntime,
+    normalizeBattleBuildSelection
+} from './GameData/BattleBuildData';
+import type {
+    BattleBuildRuntime,
+    BattleBuildSelection
+} from './GameData/BattleBuildData';
+import {
+    getSkillDefinition
+} from './GameData/SkillData';
+import {
+    getBondDefinition
+} from './GameData/BondData';
+import { UpgradeManager } from './Systems/UpgradeManager';
+import { UpgradeCardGenerator } from './Systems/UpgradeCardGenerator';
+import type {
+    UpgradeCard,
+    UpgradeCardKind
+} from './Systems/UpgradeCardGenerator';
+import { CardSystem } from './Systems/CardSystem';
+import type { CardChoice } from './Systems/CardSystem';
+import { BondSystem } from './Systems/FactionSystem';
 
 import { BattleRunData } from './BattleRunData';
 
 import {
     BATTLE_BALANCE,
+    DEFAULT_MONSTER_GROWTH_CONTEXT,
+    getMonsterGrowthScale,
     getWaveComposition
 } from './BattleBalance';
+import type { MonsterGrowthContext } from './BattleBalance';
 
 const { ccclass } = _decorator;
 
@@ -42,6 +59,7 @@ const { ccclass } = _decorator;
 export type EnemyType = 'melee' | 'ranged';
 
 export interface MonsterData extends EnemyViewData {
+    wave: number;
     level: number;
     def: number;
     atk: number;
@@ -49,21 +67,30 @@ export interface MonsterData extends EnemyViewData {
     goldReward: number;
     skillExpReward: number;
     isElite: boolean;
+    isEnhanced: boolean;
+    baseMaxHp: number;
+    baseDef: number;
+    baseAtk: number;
+    movementLane?: number;
+    moveSpeed?: number;
 }
 
 
-export function createWaveEnemies(wave: number): MonsterData[] {
+export function createWaveEnemies(
+    wave: number,
+    growthContext: MonsterGrowthContext = DEFAULT_MONSTER_GROWTH_CONTEXT
+): MonsterData[] {
 
     const composition = getWaveComposition(wave);
     const enemies: MonsterData[] = [];
 
     for (let index = 0; index < composition.total; index++) {
-        enemies.push(createNormalEnemy(wave, index));
+        enemies.push(createNormalEnemy(wave, index, growthContext));
     }
 
     // 保留旧工厂函数的第10波Boss行为，供未迁移调用继续使用。
     if (wave === getBattleWaveCount() && enemies.length > 0) {
-        enemies[0] = createBossEnemy(wave, 0);
+        enemies[0] = createBossEnemy(wave, 0, growthContext);
     }
 
     return enemies;
@@ -73,87 +100,237 @@ export function createWaveEnemies(wave: number): MonsterData[] {
 export function createNormalEnemyPack(
     wave: number,
     startIndex: number,
-    count: number
+    count: number,
+    growthContext: MonsterGrowthContext = DEFAULT_MONSTER_GROWTH_CONTEXT
 ): MonsterData[] {
     const enemies: MonsterData[] = [];
     for (let offset = 0; offset < count; offset++) {
-        enemies.push(createNormalEnemy(wave, startIndex + offset));
+        enemies.push(createNormalEnemy(
+            wave,
+            startIndex + offset,
+            growthContext
+        ));
     }
     return enemies;
 }
 
 
-export function createEliteEnemy(wave: number): MonsterData {
-    const baseHp = 10 + wave * 3;
-    const baseAtk = 3 + Math.floor(wave / 3);
-    const maxHp = Math.round(
+export function createEliteEnemy(
+    wave: number,
+    growthContext: MonsterGrowthContext = DEFAULT_MONSTER_GROWTH_CONTEXT
+): MonsterData {
+    const baseHp = getNormalBaseHp(wave);
+    const baseAtk = getNormalBaseAttack('melee', wave);
+    const baseDef = getNormalBaseDefense(wave) +
+        BATTLE_PACING.elite.defenseBonus;
+    const baseMaxHp = Math.round(
         baseHp * BATTLE_PACING.elite.hpMultiplier
     );
 
-    return {
+    return createScaledMonster({
         id: wave * 1000 + 900,
         name: '精英妖将',
         type: 'melee',
         isBoss: false,
         isElite: true,
+        isEnhanced: false,
+        wave,
         level: wave,
-        maxHp,
-        hp: maxHp,
-        def: Math.floor(wave / 4) + BATTLE_PACING.elite.defenseBonus,
+        maxHp: baseMaxHp,
+        hp: baseMaxHp,
+        def: baseDef,
         atk: Math.round(baseAtk * BATTLE_PACING.elite.attackMultiplier),
         expReward: BATTLE_PACING.elite.expReward,
         goldReward: BATTLE_PACING.elite.goldReward,
-        skillExpReward: BATTLE_PACING.elite.skillExpReward
-    };
+        skillExpReward: BATTLE_PACING.elite.skillExpReward,
+        baseMaxHp,
+        baseDef,
+        baseAtk: Math.round(baseAtk * BATTLE_PACING.elite.attackMultiplier)
+    }, growthContext);
 }
 
 
-export function createBossEnemy(wave: number, index = 999): MonsterData {
-    return {
+export function createBossEnemy(
+    wave: number,
+    index = 999,
+    growthContext: MonsterGrowthContext = DEFAULT_MONSTER_GROWTH_CONTEXT
+): MonsterData {
+    const baseMaxHp = BATTLE_BALANCE.bossBaseHp +
+        wave * BATTLE_BALANCE.bossHpPerWave;
+    const baseDef = Math.round(
+        BATTLE_BALANCE.bossBaseDefense +
+        wave * BATTLE_BALANCE.bossDefensePerWave
+    );
+    const baseAtk = Math.round(
+        BATTLE_BALANCE.bossBaseAttack +
+        wave * BATTLE_BALANCE.bossAttackPerWave
+    );
+
+    return createScaledMonster({
         id: wave * 1000 + index,
         name: '镇关妖王',
         type: 'melee',
         isBoss: true,
         isElite: false,
+        isEnhanced: false,
+        wave,
         level: wave,
-        maxHp: 500,
-        hp: 500,
-        def: 5 + wave,
-        atk: 12 + wave,
+        maxHp: baseMaxHp,
+        hp: baseMaxHp,
+        def: baseDef,
+        atk: baseAtk,
         expReward: BATTLE_BALANCE.bossExp,
         goldReward: BATTLE_BALANCE.bossGold,
-        skillExpReward: BATTLE_PACING.bossSkillExpReward
-    };
+        skillExpReward: BATTLE_PACING.bossSkillExpReward,
+        baseMaxHp,
+        baseDef,
+        baseAtk
+    }, growthContext);
 }
 
 
-function createNormalEnemy(wave: number, index: number): MonsterData {
-    const composition = getWaveComposition(wave);
-    const compositionIndex = composition.total > 0
-        ? index % composition.total
-        : index;
-    const type: EnemyType = compositionIndex < composition.melee
-        ? 'melee'
-        : 'ranged';
-    const maxHp = 10 + wave * 3;
+function getNormalBaseHp(wave: number): number {
+    return BATTLE_BALANCE.normalBaseHp +
+        Math.max(1, wave) * BATTLE_BALANCE.normalHpPerWave;
+}
 
-    return {
+
+function getNormalBaseDefense(wave: number): number {
+    return BATTLE_BALANCE.normalBaseDefense + Math.floor(
+        Math.max(0, wave - 1) /
+        BATTLE_BALANCE.normalDefenseWaveInterval
+    );
+}
+
+
+function getNormalBaseAttack(type: EnemyType, wave: number): number {
+    const safeWave = Math.max(1, wave);
+    return type === 'ranged'
+        ? Math.round(
+            BATTLE_BALANCE.rangedBaseAttack +
+            safeWave * BATTLE_BALANCE.rangedAttackPerWave
+        )
+        : Math.round(
+            BATTLE_BALANCE.meleeBaseAttack +
+            safeWave * BATTLE_BALANCE.meleeAttackPerWave
+        );
+}
+
+
+function createNormalEnemy(
+    wave: number,
+    index: number,
+    growthContext: MonsterGrowthContext
+): MonsterData {
+    const mixPattern = BATTLE_BALANCE.enemyMixPattern;
+    const patternIndex = (
+        (index % mixPattern.length) + mixPattern.length
+    ) % mixPattern.length;
+    const patternType = mixPattern[patternIndex];
+    const isEnhanced = patternType === 'enhanced-melee' ||
+        patternType === 'enhanced-ranged';
+    const type: EnemyType = patternType === 'ranged' ||
+        patternType === 'enhanced-ranged'
+        ? 'ranged'
+        : 'melee';
+    const normalMaxHp = getNormalBaseHp(wave);
+    const normalDef = getNormalBaseDefense(wave);
+    const normalAtk = getNormalBaseAttack(type, wave);
+    const maxHp = isEnhanced
+        ? Math.round(normalMaxHp * BATTLE_BALANCE.enhancedHpMultiplier)
+        : normalMaxHp;
+    const def = normalDef + (
+        isEnhanced ? BATTLE_BALANCE.enhancedDefenseBonus : 0
+    );
+    const atk = isEnhanced
+        ? Math.round(
+            normalAtk * (
+                type === 'ranged'
+                    ? BATTLE_BALANCE.enhancedRangedAttackMultiplier
+                    : BATTLE_BALANCE.enhancedMeleeAttackMultiplier
+            )
+        )
+        : normalAtk;
+
+    return createScaledMonster({
         id: wave * 1000 + index,
-        name: type === 'melee' ? '近战妖兽' : '远程妖兽',
+        name: isEnhanced
+            ? type === 'melee' ? '强化近战妖兽' : '强化远程妖兽'
+            : type === 'melee' ? '近战妖兽' : '远程妖兽',
         type,
         isBoss: false,
         isElite: false,
+        isEnhanced,
+        wave,
         level: wave,
         maxHp,
         hp: maxHp,
-        def: Math.floor(wave / 4),
-        atk: type === 'ranged'
-            ? 4 + Math.floor(wave / 2)
-            : 3 + Math.floor(wave / 3),
-        expReward: BATTLE_BALANCE.normalEnemyExp,
-        goldReward: BATTLE_BALANCE.normalEnemyGold,
-        skillExpReward: BATTLE_PACING.normalSkillExpReward
-    };
+        def,
+        atk,
+        expReward: BATTLE_BALANCE.normalEnemyExp * (
+            isEnhanced ? BATTLE_BALANCE.enhancedExpMultiplier : 1
+        ),
+        goldReward: BATTLE_BALANCE.normalEnemyGold * (
+            isEnhanced ? BATTLE_BALANCE.enhancedGoldMultiplier : 1
+        ),
+        skillExpReward: BATTLE_PACING.normalSkillExpReward * (
+            isEnhanced ? BATTLE_BALANCE.enhancedSkillExpMultiplier : 1
+        ),
+        baseMaxHp: maxHp,
+        baseDef: def,
+        baseAtk: atk
+    }, growthContext);
+}
+
+
+function createScaledMonster(
+    monster: MonsterData,
+    growthContext: MonsterGrowthContext
+): MonsterData {
+    applyMonsterGrowth(monster, growthContext, false);
+    return monster;
+}
+
+
+// 已在场的怪物也会跟随玩家成长。刷新时保持当前生命百分比，
+// 避免属性提升把残血怪物直接回满。
+export function applyMonsterGrowth(
+    monster: MonsterData,
+    growthContext: MonsterGrowthContext,
+    preserveHealthRatio = true
+): void {
+    const previousMaxHp = monster.maxHp;
+    const healthRatio = previousMaxHp > 0
+        ? monster.hp / previousMaxHp
+        : 1;
+    const scale = getMonsterGrowthScale(monster.wave, growthContext);
+    const archetypeHitsMultiplier = monster.isBoss
+        ? BATTLE_BALANCE.bossHitsMultiplier
+        : monster.isElite
+            ? BATTLE_BALANCE.eliteHitsMultiplier
+            : monster.isEnhanced
+                ? BATTLE_BALANCE.enhancedHitsMultiplier
+                : 1;
+    const minimumCombatHp = Math.round(
+        scale.expectedPlayerHit *
+        scale.targetHitsToDefeat *
+        archetypeHitsMultiplier
+    );
+
+    monster.level = scale.level;
+    monster.maxHp = Math.max(
+        1,
+        Math.round(monster.baseMaxHp * scale.hpMultiplier),
+        minimumCombatHp
+    );
+    monster.atk = Math.max(
+        1,
+        Math.round(monster.baseAtk * scale.attackMultiplier)
+    );
+    monster.def = Math.max(0, monster.baseDef + scale.defenseBonus);
+    monster.hp = preserveHealthRatio
+        ? Math.max(0, Math.round(monster.maxHp * healthRatio))
+        : monster.maxHp;
 }
 
 
@@ -162,10 +339,12 @@ export class BattleSystem extends Component {
 
     private battleUI!: BattleUI;
     private runData!: BattleRunData;
-    private playerLevelSystem!: PlayerLevelSystem;
-    private skillSystem!: SkillSystem;
-    private cardSystem!: CardSystem;
-    private factionSystem!: FactionSystem;
+    private buildSelection!: BattleBuildSelection;
+    private buildRuntime!: BattleBuildRuntime;
+    private upgradeManager!: UpgradeManager;
+    private upgradeCardGenerator!: UpgradeCardGenerator;
+    private battleCardSystem!: CardSystem;
+    private bondSystem!: BondSystem;
     private equipmentSystem!: EquipmentSystem;
     private battlePacingSystem!: BattlePacingSystem;
     private enemies: MonsterData[] = [];
@@ -175,60 +354,68 @@ export class BattleSystem extends Component {
     private readonly totalWaves = getBattleWaveCount();
     private totalExpReward = 0;
     private totalGoldReward = 0;
-    private pendingCardChoices = 0;
     private attackCursor = 0;
     private timelineComplete = false;
+    private challengeRound = 1;
+    private nextSpawnLane = 0;
+    private upgradeChoicesVisible = false;
 
     private isPaused = false;
     private onExit: () => void = () => {};
 
 
-    init(ui: BattleUI, onExit: () => void): void {
+    init(
+        ui: BattleUI,
+        onExit: () => void,
+        selection: BattleBuildSelection = DEFAULT_BATTLE_BUILD
+    ): void {
 
         this.battleUI = ui;
         this.onExit = onExit;
-        this.skillSystem = new SkillSystem(
-            gamePlayerData.skills.map((skill) => ({ ...skill }))
-        );
-        this.factionSystem = new FactionSystem(
-            gamePlayerData.currentFaction,
-            this.skillSystem
-        );
+        this.buildSelection = normalizeBattleBuildSelection(selection);
+        this.buildRuntime = createBattleBuildRuntime(this.buildSelection);
         this.equipmentSystem = new EquipmentSystem(gamePlayerData.equipment);
         this.runData = new BattleRunData(
             this.equipmentSystem.calculateAttributes(gamePlayerData.attributes)
         );
-        this.playerLevelSystem = new PlayerLevelSystem(
+        this.applyInitialBuildEffects();
+        this.upgradeManager = new UpgradeManager(
             this.runData,
-            BATTLE_RUN_LEVEL_POLICY
+            this.buildRuntime
         );
-        this.cardSystem = new CardSystem(this.factionSystem);
+        this.upgradeCardGenerator = new UpgradeCardGenerator(
+            this.buildRuntime
+        );
+        this.bondSystem = new BondSystem(
+            this.buildRuntime.selectedBondIds[0]
+        );
+        this.battleCardSystem = new CardSystem(this.bondSystem);
         this.battlePacingSystem = new BattlePacingSystem();
 
         this.currentWave = 1;
         this.totalExpReward = 0;
         this.totalGoldReward = 0;
-        this.pendingCardChoices = 0;
         this.attackCursor = 0;
         this.timelineComplete = false;
+        this.challengeRound = 1;
+        this.nextSpawnLane = 0;
+        this.upgradeChoicesVisible = false;
         this.currentPlayerHp = this.runData.maxHp;
         this.isPaused = false;
         this.enemies = [];
+        this.battleUI.hideUpgradeUI();
         this.handlePacingEvents(this.battlePacingSystem.start(), false);
 
         this.updateRunUI();
         this.renderCurrentWave();
-        this.battleUI.updateSkillSlots([]);
-        this.battleUI.updateFactionProgress(
-            this.factionSystem.getProgressText()
-        );
+        this.updateBuildUI();
     }
 
 
     begin(): void {
         this.updateBattleStatus();
         this.battleUI.addLog(
-            `十分钟试炼开始，第1批${this.enemies.length}只敌人进入战场！`
+            `五分钟试炼开始，第1批${this.enemies.length}只敌人进入战场！`
         );
         this.startCombatTimers();
     }
@@ -239,6 +426,7 @@ export class BattleSystem extends Component {
         this.unschedule(this.enemyGroupAttack);
         this.unschedule(this.regeneratePlayer);
         this.unschedule(this.updateBattleTimeline);
+        this.unschedule(this.updateEnemyMovement);
         this.unscheduleAllCallbacks();
     }
 
@@ -249,10 +437,15 @@ export class BattleSystem extends Component {
         this.unschedule(this.enemyGroupAttack);
         this.unschedule(this.regeneratePlayer);
         this.unschedule(this.updateBattleTimeline);
+        this.unschedule(this.updateEnemyMovement);
 
         this.schedule(this.playerAttack, this.runData.attackInterval);
         this.schedule(this.enemyGroupAttack, 1.5);
         this.schedule(this.regeneratePlayer, 1);
+        this.schedule(
+            this.updateEnemyMovement,
+            BATTLE_BALANCE.monsterMovementTick
+        );
         if (!this.timelineComplete) {
             this.schedule(this.updateBattleTimeline, 1);
         }
@@ -277,23 +470,25 @@ export class BattleSystem extends Component {
             return;
         }
 
-        const living = this.getLivingEnemies();
+        const living = this.getLivingEnemies()
+            .filter((enemy) => {
+                return (enemy.positionX ?? BATTLE_BALANCE.monsterSpawnX) <=
+                    BATTLE_BALANCE.monsterVisibleRightX;
+            })
+            .sort((a, b) => {
+                return (a.positionX ?? BATTLE_BALANCE.monsterSpawnX) -
+                    (b.positionX ?? BATTLE_BALANCE.monsterSpawnX);
+            });
         if (living.length === 0) {
             return;
         }
 
-        // 前期同时攻击3只；每4级增加1个目标，上限10只。
+        // 主角每次只攻击最靠近的 1 只怪物。
         const targetCount = Math.min(
             living.length,
             this.getMultiTargetCount()
         );
-        const targets: MonsterData[] = [];
-
-        for (let i = 0; i < targetCount; i++) {
-            const index = (this.attackCursor + i) % living.length;
-            targets.push(living[index]);
-        }
-        this.attackCursor = (this.attackCursor + targetCount) % living.length;
+        const targets = living.slice(0, targetCount);
 
         let defeatedCount = 0;
 
@@ -335,12 +530,28 @@ export class BattleSystem extends Component {
 
         const living = this.getLivingEnemies();
         const meleeAttackers = living
-            .filter((enemy) => enemy.type === 'melee')
+            .filter((enemy) => {
+                return enemy.type === 'melee' &&
+                    this.isEnemyInAttackRange(enemy);
+            })
+            .sort((a, b) => {
+                return (a.positionX ?? 0) - (b.positionX ?? 0);
+            })
             .slice(0, 4);
         const rangedAttackers = living
-            .filter((enemy) => enemy.type === 'ranged')
+            .filter((enemy) => {
+                return enemy.type === 'ranged' &&
+                    this.isEnemyInAttackRange(enemy);
+            })
+            .sort((a, b) => {
+                return (a.positionX ?? 0) - (b.positionX ?? 0);
+            })
             .slice(0, 2);
         const attackers = [...meleeAttackers, ...rangedAttackers];
+
+        if (attackers.length === 0) {
+            return;
+        }
 
         let totalDamage = 0;
 
@@ -363,6 +574,9 @@ export class BattleSystem extends Component {
             this.runData.maxHp
         );
         this.battleUI.showPlayerDamage(totalDamage);
+        this.battleUI.playEnemyAttack(
+            attackers.map((attacker) => attacker.id)
+        );
 
         if (this.currentPlayerHp <= 0) {
             this.onPlayerDead();
@@ -397,9 +611,7 @@ export class BattleSystem extends Component {
     private resolveEnemyDefeat(enemy: MonsterData): void {
 
         const previousMaxHp = this.runData.maxHp;
-        this.pendingCardChoices += this.playerLevelSystem.addExp(
-            enemy.expReward
-        ).levelsGained;
+        this.upgradeManager.addExp(enemy.expReward);
         this.currentPlayerHp += Math.max(
             0,
             this.runData.maxHp - previousMaxHp
@@ -409,18 +621,24 @@ export class BattleSystem extends Component {
         this.totalExpReward += enemy.expReward;
         this.totalGoldReward += enemy.goldReward;
 
-        this.grantSkillExp(enemy);
-
-        const progress = this.cardSystem.recordKill();
-        for (const bonus of progress.bonuses) {
+        const previousAttackInterval = this.runData.attackInterval;
+        const cardProgress = this.battleCardSystem.recordKill();
+        for (const bonus of cardProgress.bonuses) {
             const oldMaxHp = this.runData.maxHp;
             this.runData.applyBonus(bonus);
-            this.currentPlayerHp += Math.max(0, this.runData.maxHp - oldMaxHp);
+            this.currentPlayerHp += Math.max(
+                0,
+                this.runData.maxHp - oldMaxHp
+            );
         }
-        for (const message of progress.messages) {
+        for (const message of cardProgress.messages) {
             this.battleUI.addLog(message);
         }
+        if (this.runData.attackInterval !== previousAttackInterval) {
+            this.refreshPlayerAttackTimer();
+        }
 
+        this.refreshLivingMonsterGrowth();
         this.battleUI.removeEnemy(enemy.id);
     }
 
@@ -428,23 +646,15 @@ export class BattleSystem extends Component {
     private afterEnemyDefeats(): void {
 
         this.updateRunUI();
-        this.battleUI.updateSkillSlots(
-            this.cardSystem.getSlotDescriptions()
-        );
-        this.battleUI.updateFactionProgress(
-            this.factionSystem.getProgressText()
-        );
+        this.updateBuildUI();
         this.battleUI.updateWave(
             this.currentWave,
             this.totalWaves,
             this.getLivingEnemies().length
         );
 
-        if (this.pendingCardChoices > 0) {
-            this.pauseCombat();
-            this.showNextCardChoice();
-            return;
-        }
+        // 升级选择只叠加 UI，不停止刷怪、移动、攻击或计时。
+        this.showPendingUpgradeChoices();
 
         if (this.timelineComplete && this.getLivingEnemies().length === 0) {
             this.finishStage();
@@ -457,70 +667,122 @@ export class BattleSystem extends Component {
     }
 
 
-    private showNextCardChoice(): void {
+    private showPendingUpgradeChoices(): void {
+        const pendingLevelUps = this.upgradeManager.getPendingLevelUps();
+        this.battleUI.updatePendingUpgradeCount(pendingLevelUps);
 
-        const choices = this.cardSystem.getChoices(3);
+        if (pendingLevelUps <= 0 || this.upgradeChoicesVisible) {
+            return;
+        }
+
+        const skillAvailable = this.upgradeCardGenerator.hasAvailableCards(
+            'skill'
+        );
+        const actualBondAvailable =
+            this.buildRuntime.selectedBondIds.length > 0 &&
+            this.battleCardSystem.hasCombinedBondChoices();
+
+        if (!skillAvailable && !actualBondAvailable) {
+            this.upgradeManager.clearPendingLevelUps();
+            this.battleUI.hideUpgradeUI();
+            this.battleUI.addLog('本局携带内容均已满级，后续不再弹出升级卡。');
+            return;
+        }
+
+        this.upgradeChoicesVisible = true;
+        this.battleUI.showUpgradeCategoryPrompt(
+            pendingLevelUps,
+            skillAvailable,
+            actualBondAvailable,
+            (kind) => this.onUpgradeCategorySelected(kind)
+        );
+    }
+
+
+    private onUpgradeCategorySelected(kind: UpgradeCardKind): void {
+        const choices = kind === 'skill'
+            ? this.upgradeCardGenerator.generateUpgradeCards(3, kind)
+            : this.getBattleCardChoices(kind);
 
         if (choices.length === 0) {
-            this.pendingCardChoices = 0;
-            this.resumeAfterChoices();
+            this.upgradeChoicesVisible = false;
+            this.showPendingUpgradeChoices();
             return;
         }
 
-        this.battleUI.setStatus(
-            `局内 Lv.${this.runData.level} · 选择成长路线`
-        );
-        this.battleUI.showCardChoices(
+        this.battleUI.showUpgradeCards(
             choices,
-            (choice) => this.onCardSelected(choice)
+            this.upgradeManager.getPendingLevelUps(),
+            (choice) => this.onUpgradeSelected(choice),
+            () => {
+                this.upgradeChoicesVisible = false;
+                this.showPendingUpgradeChoices();
+            }
         );
     }
 
 
-    private onCardSelected(choice: CardChoice): void {
+    private onUpgradeSelected(choice: UpgradeCard): void {
+        this.upgradeChoicesVisible = false;
+        const previousAttackInterval = this.runData.attackInterval;
+        const previousMaxHp = this.runData.maxHp;
+        const result = choice.kind === 'skill'
+            ? this.upgradeManager.selectUpgrade(choice)
+            : this.battleCardSystem.selectCard(choice.sourceId);
 
-        const result = this.cardSystem.selectCard(choice.id);
-
-        if (!result.success) {
-            this.battleUI.addLog(result.message);
-            this.showNextCardChoice();
-            return;
+        if (result.success && choice.kind !== 'skill') {
+            this.upgradeManager.consumePendingLevelUp();
         }
 
-        if (result.bonus) {
-            const oldMaxHp = this.runData.maxHp;
+        if (result.success && result.bonus) {
             this.runData.applyBonus(result.bonus);
-            this.currentPlayerHp += Math.max(0, this.runData.maxHp - oldMaxHp);
+            this.currentPlayerHp += Math.max(
+                0,
+                this.runData.maxHp - previousMaxHp
+            );
+            this.refreshLivingMonsterGrowth();
         }
 
-        this.pendingCardChoices--;
         this.battleUI.addLog(result.message);
-        this.battleUI.updateSkillSlots(
-            this.cardSystem.getSlotDescriptions()
-        );
+        this.updateBuildUI();
         this.updateRunUI();
 
-        if (this.pendingCardChoices > 0) {
-            this.showNextCardChoice();
-        } else {
-            this.resumeAfterChoices();
+        if (
+            result.success &&
+            this.runData.attackInterval !== previousAttackInterval
+        ) {
+            this.refreshPlayerAttackTimer();
         }
+        this.showPendingUpgradeChoices();
     }
 
 
-    private resumeAfterChoices(): void {
+    private getBattleCardChoices(kind: UpgradeCardKind): UpgradeCard[] {
+        const choices = kind === 'bond'
+            ? this.battleCardSystem.getCombinedBondChoices(3)
+            : [];
+        return choices.map((choice) => {
+            const cardKind: UpgradeCardKind = choice.category === '基础卡'
+                ? 'basic'
+                : 'bond';
+            return this.toUpgradeCard(choice, cardKind);
+        });
+    }
 
-        if (this.timelineComplete && this.getLivingEnemies().length === 0) {
-            this.finishStage();
-            return;
-        }
 
-        this.isPaused = false;
-        if (this.getLivingEnemies().length === 0) {
-            this.spawnNextNormalPackImmediately();
-        }
-        this.updateBattleStatus();
-        this.startCombatTimers();
+    private toUpgradeCard(
+        choice: CardChoice,
+        kind: UpgradeCardKind
+    ): UpgradeCard {
+        return {
+            id: `${kind}:${choice.id}`,
+            kind,
+            sourceId: choice.id,
+            name: choice.name,
+            description: choice.description,
+            nextLevel: 0,
+            bonus: {}
+        };
     }
 
 
@@ -538,49 +800,6 @@ export class BattleSystem extends Component {
         this.battleUI.addLog('本批怪物已清空，下一批立即进入战场！');
         this.handlePacingEvents(events, false);
         this.updateBattleStatus();
-    }
-
-
-    private grantSkillExp(enemy: MonsterData): void {
-
-        const skillId = this.factionSystem.getCurrentFaction().startSkill;
-        const previousAttackInterval = this.runData.attackInterval;
-        const previousState = this.skillSystem.getSkills().find((skill) => {
-            return skill.skillId === skillId;
-        });
-        const previousLevel = previousState?.level ?? 0;
-        const result = this.skillSystem.addSkillExp(
-            skillId,
-            enemy.skillExpReward
-        );
-
-        if (!result.success || result.levelsGained <= 0) {
-            return;
-        }
-
-        const definition = this.skillSystem.getDefinition(skillId);
-
-        for (
-            let level = previousLevel + 1;
-            level <= result.level;
-            level++
-        ) {
-            const oldMaxHp = this.runData.maxHp;
-            this.runData.applyBonus(
-                this.skillSystem.getSkillEffect(skillId, level)
-            );
-            this.currentPlayerHp += Math.max(
-                0,
-                this.runData.maxHp - oldMaxHp
-            );
-            this.battleUI.addLog(
-                `技能【${definition?.skillName ?? skillId}】提升至 Lv.${level}`
-            );
-        }
-
-        if (this.runData.attackInterval !== previousAttackInterval) {
-            this.refreshPlayerAttackTimer();
-        }
     }
 
 
@@ -616,8 +835,8 @@ export class BattleSystem extends Component {
                 if (announce) {
                     this.battleUI.addLog(
                         carriedEnemyCount > 0
-                            ? `第${event.wave}波开始！上一波剩余${carriedEnemyCount}只继续留场。`
-                            : `第${event.wave}波开始！`
+                            ? `第${event.wave}波接续来袭！上一波${carriedEnemyCount}只与新怪同时压上。`
+                            : `第${event.wave}波接续来袭！`
                     );
                 }
                 continue;
@@ -632,19 +851,25 @@ export class BattleSystem extends Component {
                     event.wave,
                     event.packIndex
                 );
-                this.enemies.push(
-                    ...createNormalEnemyPack(
-                        event.wave,
-                        startIndex,
-                        packSize
-                    )
+                const spawnedEnemies = createNormalEnemyPack(
+                    event.wave,
+                    startIndex,
+                    packSize,
+                    this.getMonsterGrowthContext()
                 );
+                this.prepareSpawnedEnemies(spawnedEnemies);
+                this.enemies.push(...spawnedEnemies);
                 battlefieldChanged = true;
                 continue;
             }
 
             if (event.type === 'spawn-elite') {
-                this.enemies.push(createEliteEnemy(event.wave));
+                const elite = createEliteEnemy(
+                    event.wave,
+                    this.getMonsterGrowthContext()
+                );
+                this.prepareSpawnedEnemies([elite]);
+                this.enemies.push(elite);
                 battlefieldChanged = true;
                 if (announce) {
                     this.battleUI.addLog(
@@ -655,17 +880,23 @@ export class BattleSystem extends Component {
             }
 
             if (event.type === 'spawn-boss') {
-                this.enemies.push(createBossEnemy(event.wave));
+                const boss = createBossEnemy(
+                    event.wave,
+                    999,
+                    this.getMonsterGrowthContext()
+                );
+                this.prepareSpawnedEnemies([boss]);
+                this.enemies.push(boss);
                 battlefieldChanged = true;
                 if (announce) {
-                    this.battleUI.addLog('最终一分钟，镇关妖王降临！');
+                    this.battleUI.addLog('最终30秒，镇关妖王降临！');
                 }
                 continue;
             }
 
             this.timelineComplete = true;
             if (announce) {
-                this.battleUI.addLog('十分钟时间轴结束，开始清剿残敌！');
+                this.battleUI.addLog('五分钟倒计时结束，本轮立即结算！');
             }
         }
 
@@ -673,12 +904,8 @@ export class BattleSystem extends Component {
             this.renderCurrentWave();
         }
 
-        if (
-            this.timelineComplete &&
-            this.pendingCardChoices <= 0 &&
-            this.getLivingEnemies().length === 0
-        ) {
-            this.finishStage();
+        if (this.timelineComplete) {
+            this.finishStageAtTimeLimit();
         }
     }
 
@@ -688,7 +915,7 @@ export class BattleSystem extends Component {
 
         if (this.timelineComplete) {
             this.battleUI.setStatus(
-                `10:00 · 清剿残敌 · 怪物剩余 ${livingCount}`
+                '5:00 · 本轮结算中'
             );
             return;
         }
@@ -716,6 +943,8 @@ export class BattleSystem extends Component {
         }
 
         this.pauseCombat();
+        this.upgradeChoicesVisible = false;
+        this.battleUI.hideUpgradeUI();
         this.battleUI.addLog('玩家被怪潮击败……');
         this.battleUI.showDefeat(
             () => this.retryRemainingWave(),
@@ -733,13 +962,16 @@ export class BattleSystem extends Component {
         this.updateRunUI();
         this.battleUI.addLog('恢复生命，继续清理本波剩余怪物！');
         this.startCombatTimers();
+        this.showPendingUpgradeChoices();
     }
 
 
     private finishStage(): void {
 
         this.pauseCombat();
-        this.battleUI.addLog('十分钟试炼完成，怪潮全部清空！');
+        this.upgradeChoicesVisible = false;
+        this.battleUI.hideUpgradeUI();
+        this.battleUI.addLog('五分钟试炼完成！');
         this.battleUI.showVictory(
             this.totalExpReward,
             this.totalGoldReward,
@@ -749,25 +981,23 @@ export class BattleSystem extends Component {
     }
 
 
-    private restartStage(): void {
-
-        this.battleUI.resetForRestart();
-        this.currentWave = 1;
-        this.totalExpReward = 0;
-        this.totalGoldReward = 0;
-        this.pendingCardChoices = 0;
-        this.attackCursor = 0;
-        this.currentPlayerHp = this.runData.maxHp;
-        this.timelineComplete = false;
+    private finishStageAtTimeLimit(): void {
+        this.battleUI.clearEnemyGroup();
         this.enemies = [];
-        this.isPaused = false;
-        this.handlePacingEvents(this.battlePacingSystem.start(), false);
+        this.battleUI.updateWave(
+            this.currentWave,
+            this.totalWaves,
+            0
+        );
+        this.finishStage();
+    }
 
-        this.updateRunUI();
-        this.renderCurrentWave();
-        this.battleUI.addLog('保留本局构筑，开始下一轮十分钟试炼！');
-        this.updateBattleStatus();
-        this.startCombatTimers();
+
+    private restartStage(): void {
+        this.battleUI.resetForRestart();
+        this.init(this.battleUI, this.onExit, this.buildSelection);
+        this.battleUI.addLog('沿用战前携带方案，局内等级重置后开始新一局！');
+        this.begin();
     }
 
 
@@ -782,6 +1012,125 @@ export class BattleSystem extends Component {
     }
 
 
+    private prepareSpawnedEnemies(enemies: MonsterData[]): void {
+        const laneYs = BATTLE_BALANCE.monsterLaneYs;
+
+        for (let index = 0; index < enemies.length; index++) {
+            const enemy = enemies[index];
+            const lane = (this.nextSpawnLane + index) % laneYs.length;
+            const waveSpeedMultiplier = Math.min(
+                BATTLE_BALANCE.maxMonsterMoveSpeedMultiplier,
+                1 +
+                Math.max(0, enemy.wave - 1) *
+                    BATTLE_BALANCE.monsterMoveSpeedGrowthPerWave +
+                Math.max(0, this.challengeRound - 1) *
+                    BATTLE_BALANCE.monsterMoveSpeedGrowthPerRound
+            );
+            const baseSpeed = enemy.isBoss
+                ? BATTLE_BALANCE.bossMoveSpeed
+                : enemy.isElite
+                    ? BATTLE_BALANCE.eliteMoveSpeed
+                    : enemy.type === 'ranged'
+                        ? BATTLE_BALANCE.rangedMoveSpeed
+                        : BATTLE_BALANCE.meleeMoveSpeed;
+
+            enemy.movementLane = lane;
+            enemy.positionX = BATTLE_BALANCE.monsterSpawnX +
+                index * BATTLE_BALANCE.monsterSpawnSpacingX;
+            enemy.positionY = laneYs[lane];
+            enemy.moveSpeed = baseSpeed * waveSpeedMultiplier * (
+                enemy.isEnhanced
+                    ? BATTLE_BALANCE.enhancedMoveSpeedMultiplier
+                    : 1
+            );
+        }
+
+        this.nextSpawnLane = (
+            this.nextSpawnLane + enemies.length
+        ) % laneYs.length;
+    }
+
+
+    private updateEnemyMovement = (): void => {
+        if (this.isPaused) {
+            return;
+        }
+
+        const groups = new Map<string, MonsterData[]>();
+        for (const enemy of this.getLivingEnemies()) {
+            const key = `${enemy.type}:${enemy.movementLane ?? 0}`;
+            const group = groups.get(key) ?? [];
+            group.push(enemy);
+            groups.set(key, group);
+        }
+
+        for (const group of groups.values()) {
+            group.sort((a, b) => {
+                return (a.positionX ?? BATTLE_BALANCE.monsterSpawnX) -
+                    (b.positionX ?? BATTLE_BALANCE.monsterSpawnX);
+            });
+
+            let previousX: number | null = null;
+            for (const enemy of group) {
+                const currentX = enemy.positionX ??
+                    BATTLE_BALANCE.monsterSpawnX;
+                const attackX = enemy.type === 'ranged'
+                    ? BATTLE_BALANCE.rangedAttackX
+                    : BATTLE_BALANCE.meleeAttackX;
+                const queueX = previousX === null
+                    ? attackX
+                    : previousX + BATTLE_BALANCE.monsterQueueSpacingX;
+                const targetX = Math.max(attackX, queueX);
+                const movement = (enemy.moveSpeed ?? 0) *
+                    BATTLE_BALANCE.monsterMovementTick;
+                const nextX = currentX > targetX
+                    ? Math.max(targetX, currentX - movement)
+                    : currentX;
+
+                enemy.positionX = nextX;
+                previousX = nextX;
+                this.battleUI.updateEnemyPosition(
+                    enemy.id,
+                    nextX,
+                    enemy.positionY ?? 0
+                );
+            }
+        }
+    };
+
+
+    private isEnemyInAttackRange(enemy: MonsterData): boolean {
+        const attackX = enemy.type === 'ranged'
+            ? BATTLE_BALANCE.rangedAttackX
+            : BATTLE_BALANCE.meleeAttackX;
+        return (enemy.positionX ?? BATTLE_BALANCE.monsterSpawnX) <=
+            attackX + 1;
+    }
+
+
+    private getMonsterGrowthContext(): MonsterGrowthContext {
+        return {
+            playerPower: this.runData.maxHp +
+                this.runData.atk * 10 +
+                this.runData.def * 5 +
+                this.runData.crit * 10,
+            challengeRound: this.challengeRound,
+            playerAttack: this.runData.atk,
+            playerCrit: this.runData.crit,
+            playerCritDamageMultiplier: this.runData.critDamageMultiplier
+        };
+    }
+
+
+    private refreshLivingMonsterGrowth(): void {
+        const growthContext = this.getMonsterGrowthContext();
+        for (const enemy of this.getLivingEnemies()) {
+            applyMonsterGrowth(enemy, growthContext);
+            this.battleUI.updateEnemyHp(enemy.id, enemy.hp, enemy.maxHp);
+        }
+    }
+
+
     private getMultiTargetCount(): number {
         return Math.min(
             BATTLE_BALANCE.maxTargetCount,
@@ -790,6 +1139,46 @@ export class BattleSystem extends Component {
                 (this.runData.level - 1) /
                 BATTLE_BALANCE.levelsPerExtraTarget
             )
+        );
+    }
+
+
+    private applyInitialBuildEffects(): void {
+        for (const skillId of this.buildRuntime.selectedSkillIds) {
+            const definition = getSkillDefinition(skillId);
+            const level = this.buildRuntime.skillLevels[skillId] ?? 1;
+            const initialEffect = definition?.levelEffects.find((effect) => {
+                return effect.level === level;
+            });
+            if (initialEffect) {
+                this.runData.applyBonus(initialEffect.effect);
+            }
+        }
+    }
+
+
+    private updateBuildUI(): void {
+        const skillSlots = this.buildRuntime.selectedSkillIds.map(
+            (skillId, index) => {
+                const definition = getSkillDefinition(skillId);
+                const level = this.buildRuntime.skillLevels[skillId] ?? 1;
+                return `${index + 1} ${definition?.skillName ?? skillId} Lv.${level}`;
+            }
+        );
+        this.battleUI.updateSkillSlots(skillSlots);
+
+        this.battleUI.updateBondSlots(
+            this.battleCardSystem.getSlotDescriptions()
+        );
+        const bondProgress = this.buildRuntime.selectedBondIds.map((bondId) => {
+            const definition = getBondDefinition(bondId);
+            return definition?.bondName ?? bondId;
+        });
+        this.battleUI.updateFactionProgress(
+            bondProgress.length > 0
+                ? `${bondProgress.join(' · ')} · ` +
+                    this.battleCardSystem.getProgressText()
+                : '本局未携带羁绊'
         );
     }
 
@@ -807,23 +1196,13 @@ export class BattleSystem extends Component {
             this.runData.def,
             this.runData.crit,
             `${this.runData.secondaryStatsText}` +
-            ` · ${this.getStartSkillStatusText()}` +
-            ` · 多目标 ${this.getMultiTargetCount()}`
+            ` · 携带${this.buildRuntime.selectedSkillIds.length}技能` +
+            ' · 单体攻击'
         );
         this.battleUI.updatePlayerHp(
             this.currentPlayerHp,
             this.runData.maxHp
         );
-    }
-
-
-    private getStartSkillStatusText(): string {
-        const skillId = this.factionSystem.getCurrentFaction().startSkill;
-        const definition = this.skillSystem.getDefinition(skillId);
-        const state = this.skillSystem.getSkills().find((skill) => {
-            return skill.skillId === skillId;
-        });
-        return `${definition?.skillName ?? '初始技能'} Lv.${state?.level ?? 1}`;
     }
 
 

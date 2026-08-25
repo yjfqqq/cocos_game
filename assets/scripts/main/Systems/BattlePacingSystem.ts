@@ -1,6 +1,7 @@
 import {
     BATTLE_PACING,
     getBattleWaveCount,
+    getSpawnPackCountPerWave,
     getWaveAtSecond
 } from '../GameData/BattlePacingData';
 
@@ -17,12 +18,14 @@ export class BattlePacingSystem {
 
     private elapsedSeconds = 0;
     private timelineComplete = false;
+    private currentWave = 0;
     private readonly nextPackIndexByWave = new Map<number, number>();
 
 
     start(): BattlePacingEvent[] {
         this.elapsedSeconds = 0;
         this.timelineComplete = false;
+        this.currentWave = 0;
         this.nextPackIndexByWave.clear();
         return this.getEventsAtSecond(0);
     }
@@ -35,8 +38,26 @@ export class BattlePacingSystem {
         }
 
         const second = Math.floor(this.elapsedSeconds);
-        const wave = getWaveAtSecond(second);
-        return [this.createNextPackEvent(second, wave)];
+        const nextPackIndex = this.nextPackIndexByWave.get(
+            this.currentWave
+        ) ?? 0;
+        if (nextPackIndex < getSpawnPackCountPerWave()) {
+            return [this.createNextPackEvent(second, this.currentWave)];
+        }
+
+        if (this.currentWave >= getBattleWaveCount()) {
+            return [];
+        }
+
+        this.currentWave++;
+        return [
+            {
+                type: 'wave-start',
+                second,
+                wave: this.currentWave
+            },
+            this.createNextPackEvent(second, this.currentWave)
+        ];
     }
 
 
@@ -86,8 +107,6 @@ export class BattlePacingSystem {
 
     private getEventsAtSecond(second: number): BattlePacingEvent[] {
 
-        const wave = getWaveAtSecond(second);
-
         if (second >= BATTLE_PACING.totalDurationSeconds) {
             this.timelineComplete = true;
             return [
@@ -100,30 +119,47 @@ export class BattlePacingSystem {
         }
 
         const events: BattlePacingEvent[] = [];
-        const waveSecond = second % BATTLE_PACING.waveDurationSeconds;
+        const scheduledWave = getWaveAtSecond(second);
 
-        if (waveSecond === 0) {
-            events.push({ type: 'wave-start', second, wave });
+        // 30 秒是最迟进入下一波的保障；如果玩家提前清完本波，
+        // spawnNextPackNow 会在同一帧先行推进，时间轴不会再让波次倒退。
+        if (scheduledWave > this.currentWave) {
+            this.currentWave = scheduledWave;
+            events.push({
+                type: 'wave-start',
+                second,
+                wave: this.currentWave
+            });
         }
 
-        if (waveSecond % BATTLE_PACING.spawnIntervalSeconds === 0) {
-            const scheduledPackIndex = Math.floor(
-                waveSecond / BATTLE_PACING.spawnIntervalSeconds
-            );
-            const nextPackIndex = this.nextPackIndexByWave.get(wave) ?? 0;
-
-            // 已因提前清场而生成的批次，不再按固定时间重复生成。
-            if (nextPackIndex <= scheduledPackIndex) {
-                events.push(this.createNextPackEvent(second, wave));
+        if (second % BATTLE_PACING.spawnIntervalSeconds === 0) {
+            const nextPackIndex = this.nextPackIndexByWave.get(
+                this.currentWave
+            ) ?? 0;
+            if (nextPackIndex < getSpawnPackCountPerWave()) {
+                events.push(this.createNextPackEvent(
+                    second,
+                    this.currentWave
+                ));
             }
         }
 
-        if (BATTLE_PACING.eliteSpawnSeconds.indexOf(second) >= 0) {
-            events.push({ type: 'spawn-elite', second, wave });
+        if (BATTLE_PACING.eliteSpawnSeconds.some((eliteSecond) => {
+            return eliteSecond === second;
+        })) {
+            events.push({
+                type: 'spawn-elite',
+                second,
+                wave: this.currentWave
+            });
         }
 
         if (second === BATTLE_PACING.bossSpawnSecond) {
-            events.push({ type: 'spawn-boss', second, wave });
+            events.push({
+                type: 'spawn-boss',
+                second,
+                wave: this.currentWave
+            });
         }
 
         return events;

@@ -1,4 +1,3 @@
-import type { FactionId } from './FactionData';
 import type { EquipmentSlot } from './EquipmentData';
 
 
@@ -23,14 +22,14 @@ export interface PlayerCardState {
 
 export type PlayerEquipmentState = Record<EquipmentSlot, string | null>;
 
-// PlayerData 仅保存状态；升级、技能、卡牌、流派和装备规则分别由 Systems 处理。
+// PlayerData 仅保存状态；升级、技能、卡牌、羁绊和装备规则分别由 Systems 处理。
 export interface PlayerData {
     name: string;
     playerLevel: number;
     playerExp: number;
     expToNextLevel: number;
     attributes: PlayerAttributes;
-    currentFaction: FactionId;
+    currentBondId: string;
     skills: PlayerSkillState[];
     cards: PlayerCardState[];
     equipment: PlayerEquipmentState;
@@ -52,10 +51,10 @@ export const gamePlayerData: PlayerData = {
         crit: 5,
         power: 275
     },
-    currentFaction: 'tiangong',
+    currentBondId: 'tiangong-bond',
     skills: [
         {
-            skillId: 'tiangong-basic-attack',
+            skillId: 'normal-attack',
             level: 1,
             exp: 0
         }

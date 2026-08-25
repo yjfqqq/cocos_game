@@ -15,6 +15,7 @@ export interface PlayerLevelState {
 export interface PlayerLevelPolicy {
     getExpToNextLevel: (level: number) => number;
     getAttributeGrowth: (level: number) => StatModifier;
+    maxLevel?: number;
 }
 
 export interface PlayerLevelResult {
@@ -29,6 +30,7 @@ export const PERSISTENT_PLAYER_LEVEL_POLICY: PlayerLevelPolicy = {
 };
 
 export const BATTLE_RUN_LEVEL_POLICY: PlayerLevelPolicy = {
+    maxLevel: BATTLE_BALANCE.maxRunLevel,
     getExpToNextLevel: (level) => Math.min(
         BATTLE_BALANCE.maxRunLevelExp,
         BATTLE_BALANCE.initialRunLevelExp +
@@ -63,10 +65,20 @@ export class PlayerLevelSystem {
             return { levelsGained: 0, attributeGrowth: totalGrowth };
         }
 
+        const maxLevel = this.policy.maxLevel ?? Number.POSITIVE_INFINITY;
+        if (this.state.playerLevel >= maxLevel) {
+            this.state.playerExp = 0;
+            this.recalculatePower();
+            return { levelsGained: 0, attributeGrowth: totalGrowth };
+        }
+
         this.state.playerExp += amount;
         let levelsGained = 0;
 
-        while (this.state.playerExp >= this.state.expToNextLevel) {
+        while (
+            this.state.playerLevel < maxLevel &&
+            this.state.playerExp >= this.state.expToNextLevel
+        ) {
             this.state.playerExp -= this.state.expToNextLevel;
             this.state.playerLevel++;
             levelsGained++;
@@ -82,6 +94,10 @@ export class PlayerLevelSystem {
             if (onLevelUp) {
                 onLevelUp(this.state.playerLevel);
             }
+        }
+
+        if (this.state.playerLevel >= maxLevel) {
+            this.state.playerExp = 0;
         }
 
         this.recalculatePower();

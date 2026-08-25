@@ -9,15 +9,24 @@ import {
     tween
 } from 'cc';
 
-import { CardChoice } from './CardSystem';
+import { BATTLE_BALANCE } from './BattleBalance';
+import type {
+    UpgradeCard,
+    UpgradeCardKind
+} from './Systems/UpgradeCardGenerator';
 
 export interface EnemyViewData {
     id: number;
     name: string;
     type: 'melee' | 'ranged';
     isBoss: boolean;
+    isElite?: boolean;
+    isEnhanced?: boolean;
+    level?: number;
     maxHp: number;
     hp: number;
+    positionX?: number;
+    positionY?: number;
 }
 
 interface EnemyNodeView {
@@ -57,7 +66,12 @@ export class BattleUI {
     private statusLabel!: Label;
     private logLabel!: Label;
     private skillSlotLabels: Label[] = [];
+    private bondSlotLabels: Label[] = [];
+    private bondSlotTitle!: Label;
     private cardChoicePanel: Node | null = null;
+    private upgradeCategoryPanel: Node | null = null;
+    private upgradeTitleLabel: Label | null = null;
+    private pendingUpgradeLabel: Label | null = null;
 
     private logs: string[] = [];
 
@@ -70,233 +84,323 @@ export class BattleUI {
 
         this.root = parent;
 
-
-        // 返回按钮（左上角）
-        const backBtn = this.createPanel(
+        // 参考刷刷刷类游戏：顶部只承载关卡信息，中央尽量留给战场，
+        // 属性、构筑和升级入口集中在底部 HUD。
+        const topBar = this.createPanel(
             parent,
-            'BackButton',
-            170,
-            60,
-            -560,
+            'TopBattleHud',
+            1240,
+            72,
+            0,
             320,
-            new Color(39, 45, 66)
+            new Color(13, 18, 28, 244)
         );
 
+        const backBtn = this.createPanel(
+            topBar,
+            'BackButton',
+            142,
+            48,
+            -535,
+            0,
+            new Color(116, 38, 48)
+        );
         const backLabel = this.createLabel(
             backBtn,
             'Label',
-            '← 返回',
+            '← 退出战斗',
             0,
             0,
-            24,
+            20,
             Color.WHITE
         );
-        this.shrink(backLabel, 170, 60);
-
+        this.shrink(backLabel, 142, 48);
         const backButton = backBtn.addComponent(Button);
         backButton.transition = Button.Transition.NONE;
-        backBtn.on(
-            Button.EventType.CLICK,
-            () => onBack()
+        backBtn.on(Button.EventType.CLICK, () => onBack());
+
+        this.createLabel(
+            topBar,
+            'Title',
+            '怪潮试炼',
+            -410,
+            0,
+            25,
+            new Color(241, 222, 169)
         );
 
-
-        // 标题
-        this.createLabel(
-            parent,
-            'Title',
-            '自动战斗',
+        this.statusLabel = this.createLabel(
+            topBar,
+            'BattleStatus',
+            '准备中...',
             0,
-            320,
-            34,
+            10,
+            20,
             Color.WHITE
         );
 
         this.waveText = this.createLabel(
-            parent,
+            topBar,
             'Wave',
             '第 1 / 10 波',
-            0,
-            278,
-            22,
+            430,
+            10,
+            20,
             new Color(235, 205, 120)
         );
 
         this.factionProgressText = this.createLabel(
-            parent,
-            'FactionProgress',
-            '战神 0/6 · 雷部 0/6 · 天王 0/6',
+            topBar,
+            'BondProgress',
+            '天宫羁绊 0/6层',
             0,
-            246,
-            18,
-            new Color(180, 185, 205)
-        );
-
-
-        // 左侧局内角色信息
-        this.playerPanel = this.createPanel(
-            parent,
-            'PlayerPanel',
-            250,
-            330,
-            -500,
-            25,
-            new Color(31, 36, 54)
-        );
-
-        this.createLabel(this.playerPanel, 'Name', '玩家', 0, 135, 27, Color.WHITE);
-
-        this.playerLevelText = this.createLabel(
-            this.playerPanel,
-            'Level',
-            '局内 Lv.1',
-            0,
-            98,
-            21,
-            new Color(180, 185, 205)
-        );
-
-        this.playerHpG = this.createGraphics(
-            this.playerPanel,
-            'HpBar',
-            0,
-            60,
-            200,
-            22
-        );
-
-        this.playerHpText = this.createLabel(
-            this.playerPanel,
-            'HpText',
-            'HP：100 / 100',
-            0,
-            30,
-            17,
-            Color.WHITE
-        );
-
-        this.playerExpText = this.createLabel(
-            this.playerPanel,
-            'RunExp',
-            '局内经验 0 / 20',
-            0,
-            -5,
-            17,
-            new Color(235, 205, 120)
-        );
-
-        this.playerStatText = this.createLabel(
-            this.playerPanel,
-            'RunStats',
-            '攻击 0 · 防御 0 · 暴击 0%',
-            0,
-            -48,
+            -18,
             15,
-            Color.WHITE
+            new Color(178, 190, 208)
         );
 
-        this.playerSecondaryStatText = this.createLabel(
-            this.playerPanel,
-            'RunSecondaryStats',
-            '攻速 +0% · 范围 +0% · 技能 +0%',
-            0,
-            -100,
-            13,
-            new Color(160, 168, 190)
-        );
-        this.shrink(this.playerSecondaryStatText, 225, 70);
-        this.playerSecondaryStatText.overflow = Label.Overflow.SHRINK;
-
-
-        // 右侧怪海战场
+        // 中央全宽战场。
         this.enemyField = this.createPanel(
             parent,
             'EnemyField',
-            960,
-            330,
-            130,
-            25,
-            new Color(24, 29, 43)
+            1200,
+            430,
+            0,
+            45,
+            new Color(20, 27, 39)
         );
 
-
-        // 状态（战斗进行中提示，独立于日志区，避免重叠）
-        this.statusLabel = this.createLabel(
-            parent,
-            'BattleStatus',
-            '准备中...',
+        const rangedLine = this.createGraphics(
+            this.enemyField,
+            'RangedAttackLine',
+            BATTLE_BALANCE.rangedAttackX,
             0,
-            -155,
-            23,
+            2,
+            360
+        );
+        rangedLine.strokeColor = new Color(74, 113, 160, 125);
+        rangedLine.lineWidth = 2;
+        rangedLine.moveTo(0, -180);
+        rangedLine.lineTo(0, 180);
+        rangedLine.stroke();
+        this.createLabel(
+            this.enemyField,
+            'RangedAttackLabel',
+            '远程射程线',
+            BATTLE_BALANCE.rangedAttackX,
+            188,
+            13,
+            new Color(105, 145, 190)
+        );
+
+        // 玩家战场标记，只负责攻击和受击动画。
+        this.playerPanel = this.createPanel(
+            this.enemyField,
+            'PlayerPanel',
+            132,
+            168,
+            -520,
+            -5,
+            new Color(40, 58, 75, 246)
+        );
+        this.createLabel(
+            this.playerPanel,
+            'Avatar',
+            '主角',
+            0,
+            30,
+            28,
+            new Color(255, 238, 191)
+        );
+        this.createLabel(
+            this.playerPanel,
+            'AutoAttack',
+            '自动攻击',
+            0,
+            -25,
+            16,
+            new Color(126, 211, 237)
+        );
+
+        // 左下角色 HUD。
+        const playerHud = this.createPanel(
+            parent,
+            'PlayerBattleHud',
+            360,
+            122,
+            -420,
+            -275,
+            new Color(17, 24, 37, 248)
+        );
+        this.playerLevelText = this.createLabel(
+            playerHud,
+            'Level',
+            '局内 Lv.1',
+            -125,
+            36,
+            20,
+            new Color(235, 205, 120)
+        );
+        this.playerHpG = this.createGraphics(
+            playerHud,
+            'HpBar',
+            55,
+            38,
+            220,
+            18
+        );
+        this.playerHpText = this.createLabel(
+            playerHud,
+            'HpText',
+            'HP：100 / 100',
+            55,
+            14,
+            15,
             Color.WHITE
         );
-
-        // 10 个技能槽
-        this.createPanel(
-            parent,
-            'SkillBarBg',
-            1100,
-            52,
-            0,
-            -220,
-            new Color(25, 30, 46)
+        this.playerExpText = this.createLabel(
+            playerHud,
+            'RunExp',
+            '局内经验 0 / 20',
+            -100,
+            -15,
+            15,
+            new Color(235, 205, 120)
         );
+        this.playerStatText = this.createLabel(
+            playerHud,
+            'RunStats',
+            '攻击 0 · 防御 0 · 暴击 0%',
+            55,
+            -15,
+            14,
+            Color.WHITE
+        );
+        this.playerSecondaryStatText = this.createLabel(
+            playerHud,
+            'RunSecondaryStats',
+            '攻速 +0% · 技能 +0%',
+            0,
+            -43,
+            12,
+            new Color(160, 168, 190)
+        );
+        this.shrink(this.playerSecondaryStatText, 330, 28);
+        this.playerSecondaryStatText.overflow = Label.Overflow.SHRINK;
 
+        // 中下方构筑快捷栏，结构按技能携带上限预留四格。
+        const buildHud = this.createPanel(
+            parent,
+            'BattleBuildHud',
+            320,
+            122,
+            -70,
+            -275,
+            new Color(17, 24, 37, 248)
+        );
+        this.createLabel(
+            buildHud,
+            'Title',
+            '本局技能栏',
+            0,
+            38,
+            17,
+            new Color(178, 190, 208)
+        );
         this.skillSlotLabels = [];
-        const slotStartX = -495;
-
-        for (let i = 0; i < 10; i++) {
+        const slotStartX = -105;
+        for (let i = 0; i < 4; i++) {
             const slot = this.createPanel(
-                parent,
+                buildHud,
                 `SkillSlot_${i + 1}`,
-                98,
-                40,
-                slotStartX + i * 110,
-                -220,
+                62,
+                54,
+                slotStartX + i * 70,
+                -18,
                 new Color(42, 48, 68)
             );
-
             const label = this.createLabel(
                 slot,
                 'Label',
                 `${i + 1} 空`,
                 0,
                 0,
-                14,
+                13,
                 new Color(145, 152, 175)
             );
-            this.shrink(label, 94, 38);
+            this.shrink(label, 58, 50);
             label.overflow = Label.Overflow.SHRINK;
             this.skillSlotLabels.push(label);
         }
 
-
-        // 战斗日志背景面板（固定高度，防止文字溢出界面）
-        this.createPanel(
+        // 基础卡已经归入羁绊卡池，共用10个吞噬卡槽；
+        // 整套羁绊卡均不占用4个技能格。
+        const bondHud = this.createPanel(
             parent,
-            'LogBg',
-            1000,
-            100,
-            0,
-            -310,
-            new Color(18, 22, 36)
+            'BattleBondHud',
+            520,
+            122,
+            350,
+            -275,
+            new Color(17, 24, 37, 248)
         );
+        this.bondSlotTitle = this.createLabel(
+            bondHud,
+            'Title',
+            '羁绊卡槽  0 / 10',
+            0,
+            38,
+            17,
+            new Color(202, 174, 226)
+        );
+        this.bondSlotLabels = [];
+        const bondSlotStartX = -220;
+        for (let i = 0; i < 10; i++) {
+            const slot = this.createPanel(
+                bondHud,
+                `BondSlot_${i + 1}`,
+                45,
+                54,
+                bondSlotStartX + i * 49,
+                -18,
+                new Color(48, 42, 63)
+            );
+            const label = this.createLabel(
+                slot,
+                'Label',
+                `${i + 1}`,
+                0,
+                0,
+                11,
+                new Color(130, 128, 145)
+            );
+            this.shrink(label, 42, 50);
+            label.overflow = Label.Overflow.SHRINK;
+            this.bondSlotLabels.push(label);
+        }
 
-
-        // 战斗日志（最多 5 条，从上到下按时间顺序）
+        // 战斗日志贴在战场左下角，不再单独占用整条底栏。
+        const logPanel = this.createPanel(
+            this.enemyField,
+            'LogBg',
+            480,
+            90,
+            -300,
+            -160,
+            new Color(10, 15, 24, 205)
+        );
         this.logLabel = this.createLabel(
-            parent,
+            logPanel,
             'BattleLog',
             '',
             0,
-            -310,
-            16,
+            0,
+            14,
             new Color(180, 185, 205)
         );
-
         const logTf = this.logLabel.node.getComponent(UITransform);
         if (logTf) {
-            logTf.setContentSize(960, 92);
+            logTf.setContentSize(450, 78);
         }
         this.logLabel.verticalAlign = Label.VerticalAlign.TOP;
     }
@@ -308,7 +412,7 @@ export class BattleUI {
 
     updatePlayerHp(current: number, max: number): void {
 
-        this.drawHp(this.playerHpG, current, max, 200, 22);
+        this.drawHp(this.playerHpG, current, max, 220, 18);
 
         this.playerHpText.string =
             `HP：${Math.max(0, Math.ceil(current))} / ${max}`;
@@ -372,7 +476,9 @@ export class BattleUI {
         secondaryStats: string
     ): void {
         this.playerLevelText.string = `局内 Lv.${level}`;
-        this.playerExpText.string = `局内经验 ${exp} / ${expToNext}`;
+        this.playerExpText.string = level >= BATTLE_BALANCE.maxRunLevel
+            ? '局内经验 已满级'
+            : `局内经验 ${exp} / ${expToNext}`;
         this.playerStatText.string = `攻击 ${atk} · 防御 ${def} · 暴击 ${crit}%`;
         this.playerSecondaryStatText.string = secondaryStats;
     }
@@ -412,73 +518,186 @@ export class BattleUI {
 
 
     // =====================================================
-    // 升级三选一
+    // 非暂停式升级：先选“技能 / 羁绊”，再进入对应卡池。
     // =====================================================
 
-    showCardChoices(
-        choices: CardChoice[],
-        onSelect: (choice: CardChoice) => void
+    showUpgradeCategoryPrompt(
+        pendingLevelUps: number,
+        skillAvailable: boolean,
+        bondAvailable: boolean,
+        onSelectKind: (kind: UpgradeCardKind) => void
     ): void {
-
-        this.hideCardChoices();
+        this.hideUpgradeUI();
 
         const panel = this.createPanel(
             this.root,
-            'CardChoicePanel',
-            900,
-            410,
+            'UpgradeCategoryPanel',
+            520,
+            122,
+            350,
+            -275,
+            new Color(17, 24, 37, 250)
+        );
+        this.upgradeCategoryPanel = panel;
+        this.pendingUpgradeLabel = this.createLabel(
+            panel,
+            'PendingUpgradeLabel',
+            `待选择升级 ×${pendingLevelUps}`,
             0,
-            20,
-            new Color(20, 26, 40)
+            39,
+            18,
+            new Color(255, 221, 116)
+        );
+
+        this.createUpgradeCategoryButton(
+            panel,
+            'SkillUpgradeButton',
+            '技能',
+            '普攻卡池',
+            -95,
+            skillAvailable,
+            new Color(38, 96, 126),
+            () => onSelectKind('skill')
+        );
+        this.createUpgradeCategoryButton(
+            panel,
+            'BondUpgradeButton',
+            '羁绊',
+            '天宫 / 基础',
+            95,
+            bondAvailable,
+            new Color(91, 57, 120),
+            () => onSelectKind('bond')
+        );
+    }
+
+
+    showUpgradeCards(
+        choices: UpgradeCard[],
+        pendingLevelUps: number,
+        onSelect: (choice: UpgradeCard) => void,
+        onBack: () => void
+    ): void {
+        this.hideUpgradeUI();
+
+        // 参考图使用横向高卡牌覆盖在战场之上；这里不创建全屏遮罩，
+        // 四周仍能观察怪物移动，BattleSystem 也始终继续运行。
+        const panel = this.createPanel(
+            this.root,
+            'UpgradeChoicePanel',
+            920,
+            420,
+            0,
+            45,
+            new Color(10, 15, 24, 235)
         );
         this.cardChoicePanel = panel;
 
-        this.createLabel(
+        const cardKind = choices[0]?.kind ?? 'skill';
+        const cardTitle = cardKind === 'skill'
+            ? '技能卡牌'
+            : '羁绊卡牌';
+        this.upgradeTitleLabel = this.createLabel(
             panel,
             'Title',
-            '境界提升 · 选择一张卡牌',
+            `${cardTitle} · 待选择 ×${pendingLevelUps}`,
             0,
-            165,
-            32,
+            184,
+            28,
             new Color(235, 205, 120)
         );
+        this.createLabel(
+            panel,
+            'RunningHint',
+            '战斗仍在继续',
+            -380,
+            184,
+            15,
+            new Color(116, 215, 161)
+        );
+
+        const backNode = this.createPanel(
+            panel,
+            'BackToUpgradeCategory',
+            116,
+            42,
+            380,
+            181,
+            new Color(54, 62, 82)
+        );
+        this.createLabel(
+            backNode,
+            'Label',
+            '返回分类',
+            0,
+            0,
+            17,
+            Color.WHITE
+        );
+        const backButton = backNode.addComponent(Button);
+        backButton.transition = Button.Transition.NONE;
+        backNode.on(Button.EventType.CLICK, () => {
+            this.hideUpgradeCards();
+            onBack();
+        });
 
         const positions = choices.length === 1
             ? [0]
             : choices.length === 2
-                ? [-180, 180]
-                : [-260, 0, 260];
+                ? [-150, 150]
+                : [-290, 0, 290];
 
         for (let i = 0; i < choices.length; i++) {
             const choice = choices[i];
             const card = this.createPanel(
                 panel,
                 `Choice_${choice.id}`,
-                230,
                 250,
+                310,
                 positions[i],
                 -5,
-                choice.category === '神将卡'
-                    ? new Color(55, 51, 78)
-                    : new Color(39, 45, 66)
+                choice.kind === 'bond'
+                    ? new Color(48, 38, 65, 252)
+                    : choice.kind === 'basic'
+                        ? new Color(64, 48, 29, 252)
+                        : new Color(29, 42, 58, 252)
             );
+            const cardGraphics = card.getComponent(Graphics);
+            if (cardGraphics) {
+                cardGraphics.strokeColor = choice.kind === 'bond'
+                    ? new Color(194, 137, 229)
+                    : choice.kind === 'basic'
+                        ? new Color(226, 179, 96)
+                        : new Color(95, 184, 224);
+                cardGraphics.lineWidth = 3;
+                cardGraphics.rect(-123, -153, 246, 306);
+                cardGraphics.stroke();
+            }
 
             this.createLabel(
                 card,
                 'Category',
-                choice.category,
+                choice.kind === 'skill'
+                    ? '技能强化'
+                    : choice.kind === 'bond'
+                        ? '天宫羁绊'
+                        : '基础属性',
                 0,
-                92,
+                128,
                 17,
-                new Color(180, 185, 205)
+                choice.kind === 'skill'
+                    ? new Color(120, 205, 235)
+                    : choice.kind === 'bond'
+                        ? new Color(215, 165, 235)
+                        : new Color(235, 196, 120)
             );
             this.createLabel(
                 card,
                 'Name',
                 choice.name,
                 0,
-                55,
-                26,
+                75,
+                25,
                 Color.WHITE
             );
 
@@ -487,21 +706,25 @@ export class BattleUI {
                 'Description',
                 choice.description,
                 0,
-                5,
+                10,
                 18,
                 new Color(200, 205, 220)
             );
-            this.shrink(description, 200, 70);
+            this.shrink(description, 208, 100);
             description.overflow = Label.Overflow.SHRINK;
 
             const selectButton = this.createPanel(
                 card,
                 'SelectButton',
-                170,
-                48,
+                178,
+                50,
                 0,
-                -82,
-                new Color(67, 77, 110)
+                -112,
+                choice.kind === 'bond'
+                    ? new Color(104, 61, 137)
+                    : choice.kind === 'basic'
+                        ? new Color(132, 88, 37)
+                        : new Color(42, 105, 137)
             );
             const selectLabel = this.createLabel(
                 selectButton,
@@ -509,17 +732,17 @@ export class BattleUI {
                 '选择',
                 0,
                 0,
-                21,
+                20,
                 Color.WHITE
             );
-            this.shrink(selectLabel, 170, 48);
+            this.shrink(selectLabel, 178, 50);
 
             const button = selectButton.addComponent(Button);
             button.transition = Button.Transition.NONE;
             selectButton.on(
                 Button.EventType.CLICK,
                 () => {
-                    this.hideCardChoices();
+                    this.hideUpgradeCards();
                     onSelect(choice);
                 }
             );
@@ -527,7 +750,34 @@ export class BattleUI {
     }
 
 
-    private hideCardChoices(): void {
+    updateBondSlots(slots: string[]): void {
+        for (let i = 0; i < this.bondSlotLabels.length; i++) {
+            const text = slots[i];
+            const label = this.bondSlotLabels[i];
+            label.string = text || `${i + 1}`;
+            label.color = text
+                ? new Color(222, 194, 238)
+                : new Color(130, 128, 145);
+        }
+        this.bondSlotTitle.string =
+            `羁绊卡槽  ${Math.min(10, slots.length)} / 10`;
+    }
+
+
+    updatePendingUpgradeCount(pendingLevelUps: number): void {
+        if (this.upgradeTitleLabel) {
+            const prefix = this.upgradeTitleLabel.string.split(' · ')[0];
+            this.upgradeTitleLabel.string =
+                `${prefix} · 待选择 ×${pendingLevelUps}`;
+        }
+        if (this.pendingUpgradeLabel) {
+            this.pendingUpgradeLabel.string =
+                `待选择升级 ×${pendingLevelUps}`;
+        }
+    }
+
+
+    hideUpgradeCards(): void {
 
         if (!this.cardChoicePanel) {
             return;
@@ -536,6 +786,81 @@ export class BattleUI {
         this.cardChoicePanel.removeFromParent();
         this.cardChoicePanel.destroy();
         this.cardChoicePanel = null;
+        this.upgradeTitleLabel = null;
+    }
+
+
+    hideUpgradeUI(): void {
+        this.hideUpgradeCards();
+        this.hideUpgradeCategoryPrompt();
+    }
+
+
+    private hideUpgradeCategoryPrompt(): void {
+        if (!this.upgradeCategoryPanel) {
+            return;
+        }
+        this.upgradeCategoryPanel.removeFromParent();
+        this.upgradeCategoryPanel.destroy();
+        this.upgradeCategoryPanel = null;
+        this.pendingUpgradeLabel = null;
+    }
+
+
+    private createUpgradeCategoryButton(
+        parent: Node,
+        name: string,
+        title: string,
+        subtitle: string,
+        x: number,
+        available: boolean,
+        color: Color,
+        onClick: () => void
+    ): void {
+        const node = this.createPanel(
+            parent,
+            name,
+            164,
+            62,
+            x,
+            -17,
+            available ? color : new Color(46, 49, 58)
+        );
+        this.createLabel(
+            node,
+            'Title',
+            available ? `✦ ${title} ✦` : `${title}（满）`,
+            0,
+            12,
+            21,
+            available ? Color.WHITE : new Color(145, 145, 150)
+        );
+        this.createLabel(
+            node,
+            'Subtitle',
+            subtitle,
+            0,
+            -15,
+            13,
+            available
+                ? new Color(203, 215, 230)
+                : new Color(112, 112, 118)
+        );
+
+        if (!available) {
+            return;
+        }
+
+        const button = node.addComponent(Button);
+        button.transition = Button.Transition.NONE;
+        node.on(Button.EventType.CLICK, onClick);
+        tween(node)
+            .repeatForever(
+                tween()
+                    .to(0.42, { scale: new Vec3(1.055, 1.055, 1) })
+                    .to(0.42, { scale: new Vec3(1, 1, 1) })
+            )
+            .start();
     }
 
 
@@ -545,12 +870,7 @@ export class BattleUI {
 
     showEnemyGroup(enemies: EnemyViewData[]): void {
 
-        const oldChildren = [...this.enemyField.children];
-        for (const child of oldChildren) {
-            child.removeFromParent();
-            child.destroy();
-        }
-        this.enemyViews.clear();
+        this.clearEnemyGroup();
 
         // 远程单位排在战场后排，近战单位铺在前排。
         const ordered = [...enemies].sort((a, b) => {
@@ -575,15 +895,19 @@ export class BattleUI {
             const enemy = ordered[i];
             const column = i % columns;
             const row = Math.floor(i / columns);
+            const positionX = enemy.positionX ?? startX + column * gapX;
+            const positionY = enemy.positionY ?? startY - row * gapY;
             const node = this.createPanel(
                 this.enemyField,
                 `Enemy_${enemy.id}`,
                 enemy.isBoss ? 76 : 62,
                 enemy.isBoss ? 54 : 46,
-                startX + column * gapX,
-                startY - row * gapY,
+                positionX,
+                positionY,
                 enemy.isBoss
                     ? new Color(130, 84, 45)
+                    : enemy.isEnhanced
+                        ? new Color(126, 87, 38)
                     : enemy.type === 'melee'
                         ? new Color(104, 56, 62)
                         : new Color(52, 74, 112)
@@ -592,7 +916,14 @@ export class BattleUI {
             const name = this.createLabel(
                 node,
                 'Name',
-                enemy.isBoss ? '妖王' : enemy.type === 'melee' ? '近' : '远',
+                `${enemy.isBoss
+                    ? '妖王'
+                    : enemy.isElite
+                        ? '精'
+                        : enemy.isEnhanced
+                            ? '强'
+                        : enemy.type === 'melee' ? '近' : '远'}` +
+                    `${enemy.level ? `·${enemy.level}` : ''}`,
                 0,
                 7,
                 enemy.isBoss ? 16 : 14,
@@ -625,6 +956,7 @@ export class BattleUI {
                 hpText,
                 hpWidth: enemy.isBoss ? 64 : 52
             });
+            node.active = positionX <= BATTLE_BALANCE.monsterVisibleRightX;
             this.updateEnemyHp(enemy.id, enemy.hp, enemy.maxHp);
         }
     }
@@ -639,6 +971,25 @@ export class BattleUI {
 
         this.drawHp(view.hpGraphics, current, max, view.hpWidth, 6);
         view.hpText.string = `${Math.max(0, Math.ceil(current))}`;
+    }
+
+
+    clearEnemyGroup(): void {
+        for (const view of this.enemyViews.values()) {
+            view.node.removeFromParent();
+            view.node.destroy();
+        }
+        this.enemyViews.clear();
+    }
+
+
+    updateEnemyPosition(id: number, x: number, y: number): void {
+        const view = this.enemyViews.get(id);
+        if (!view) {
+            return;
+        }
+        view.node.setPosition(x, y, 0);
+        view.node.active = x <= BATTLE_BALANCE.monsterVisibleRightX;
     }
 
 
@@ -690,8 +1041,8 @@ export class BattleUI {
             this.playerPanel,
             'Damage',
             `-${amount}`,
-            75,
-            75,
+            0,
+            62,
             24,
             new Color(255, 90, 90)
         );
@@ -717,6 +1068,20 @@ export class BattleUI {
             tween(view.node)
                 .to(0.06, { scale: new Vec3(1.12, 1.12, 1) })
                 .to(0.08, { scale: new Vec3(1, 1, 1) })
+                .start();
+        }
+    }
+
+
+    playEnemyAttack(attackerIds: number[]): void {
+        for (const id of attackerIds) {
+            const view = this.enemyViews.get(id);
+            if (!view) {
+                continue;
+            }
+            tween(view.node)
+                .to(0.08, { scale: new Vec3(1.1, 1.1, 1) })
+                .to(0.1, { scale: new Vec3(1, 1, 1) })
                 .start();
         }
     }
@@ -749,7 +1114,7 @@ export class BattleUI {
         this.createLabel(
             panel,
             'Title',
-            '十波通关！',
+            '五分钟通关！',
             0,
             110,
             42,
@@ -777,7 +1142,7 @@ export class BattleUI {
         );
 
 
-        // 开始下一轮十波挑战
+        // 开始下一轮五分钟挑战
         const continueBtn = this.createPanel(
             panel,
             'ContinueButton',
@@ -935,7 +1300,7 @@ export class BattleUI {
 
     resetForRestart(): void {
 
-        this.hideCardChoices();
+        this.hideUpgradeUI();
 
         const names = [
             'VictoryPanel',

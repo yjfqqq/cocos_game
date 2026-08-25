@@ -39,6 +39,22 @@ import {
 import {
     BattleSystem
 } from './BattleSystem';
+import type {
+    BattleBuildSelection
+} from './GameData/BattleBuildData';
+import {
+    BATTLE_BUILD_LIMITS,
+    getLastBattleBuildSelection,
+    normalizeBattleBuildSelection,
+    setLastBattleBuildSelection
+} from './GameData/BattleBuildData';
+import {
+    getSkillDefinition,
+    NORMAL_ATTACK_SKILL_ID
+} from './GameData/SkillData';
+import {
+    getBondDefinition
+} from './GameData/BondData';
 
 const { ccclass } = _decorator;
 
@@ -50,6 +66,7 @@ export class MainUIBuilder extends Component {
 
     private battleRoot: Node | null = null;
     private battleSystem: BattleSystem | null = null;
+    private battleConfigRoot: Node | null = null;
 
     private shopMessage = '';
     private bagMessage = '';
@@ -315,7 +332,7 @@ export class MainUIBuilder extends Component {
 
 
         // =====================================================
-        // 左侧流派面板
+        // 左侧羁绊面板
         // =====================================================
 
         const leftPanel = this.createPanel(
@@ -331,7 +348,7 @@ export class MainUIBuilder extends Component {
         this.createLabel(
             leftPanel,
             'FactionTitle',
-            'CURRENT FACTION  ·  当前流派',
+            'CURRENT BOND  ·  当前羁绊',
             0,
             204,
             17,
@@ -370,7 +387,7 @@ export class MainUIBuilder extends Component {
         );
 
 
-        // 流派进度
+        // 羁绊进度
 
         this.createFactionProgress(
             leftPanel,
@@ -451,7 +468,7 @@ export class MainUIBuilder extends Component {
         this.createLabel(
             centerPanel,
             'CenterTitle',
-            '天宫 · 流派核心',
+            '天宫 · 羁绊核心',
             0,
             204,
             30,
@@ -472,7 +489,7 @@ export class MainUIBuilder extends Component {
 
 
         // =====================================================
-        // 流派核心
+        // 羁绊核心
         // =====================================================
 
         const core = this.createNode(
@@ -488,7 +505,7 @@ export class MainUIBuilder extends Component {
         this.createLabel(
             core,
             'CoreTitle',
-            '流派核心',
+            '羁绊核心',
             0,
             18,
             30,
@@ -523,7 +540,7 @@ export class MainUIBuilder extends Component {
         this.createLabel(
             centerPanel,
             'Hint',
-            '收集战神、雷部、天王神将，逐步解锁流派技能',
+            '收集战神、雷部、天王神将，逐步强化天宫羁绊',
             0,
             -137,
             17,
@@ -568,7 +585,7 @@ export class MainUIBuilder extends Component {
         startBattleBtn.on(
             Button.EventType.CLICK,
             () => {
-                this.enterBattle();
+                this.openBattleBuildConfig();
             }
         );
     }
@@ -778,10 +795,254 @@ export class MainUIBuilder extends Component {
 
 
     // =====================================================
+    // 本局 Build 配置
+    // =====================================================
+
+    private openBattleBuildConfig(): void {
+        const main = this.node.getChildByName('MainUI');
+        if (main) {
+            main.active = false;
+        }
+
+        this.destroyBattleBuildConfig();
+
+        const selection = normalizeBattleBuildSelection(
+            getLastBattleBuildSelection()
+        );
+        const root = this.createNode(
+            this.node,
+            'BattleBuildConfigRoot',
+            1280,
+            720
+        );
+        this.battleConfigRoot = root;
+
+        this.createPanel(
+            root,
+            'Background',
+            1280,
+            720,
+            0,
+            0,
+            new Color(10, 19, 35, 250)
+        );
+        this.createLabel(
+            root,
+            'Title',
+            '本局配置',
+            0,
+            292,
+            38,
+            new Color(255, 232, 174)
+        );
+        this.createLabel(
+            root,
+            'Subtitle',
+            '战斗中只会强化本次携带的技能与羁绊',
+            0,
+            248,
+            20,
+            new Color(171, 193, 213)
+        );
+
+        const skillPanel = this.createPanel(
+            root,
+            'SkillBuildPanel',
+            540,
+            390,
+            -290,
+            25,
+            new Color(23, 39, 62, 246)
+        );
+        this.createLabel(
+            skillPanel,
+            'Title',
+            `技能  ${selection.selectedSkillIds.length} / ` +
+                `${BATTLE_BUILD_LIMITS.maxEquippedSkills}`,
+            0,
+            155,
+            29,
+            new Color(126, 211, 237)
+        );
+
+        for (let index = 0; index < selection.selectedSkillIds.length; index++) {
+            const skillId = selection.selectedSkillIds[index];
+            const definition = getSkillDefinition(skillId);
+            const isRequired = skillId === NORMAL_ATTACK_SKILL_ID;
+            const row = this.createPanel(
+                skillPanel,
+                `EquippedSkill_${skillId}`,
+                470,
+                96,
+                0,
+                72 - index * 112,
+                isRequired
+                    ? new Color(44, 71, 91, 248)
+                    : new Color(36, 53, 78, 245)
+            );
+            this.createLabel(
+                row,
+                'Name',
+                `✓ ${definition?.skillName ?? skillId}` +
+                    (isRequired ? '（必带 · 锁定）' : '（已携带）'),
+                -70,
+                19,
+                23,
+                Color.WHITE
+            );
+            this.createLabel(
+                row,
+                'Description',
+                definition?.description ?? '本局可持续强化',
+                -70,
+                -22,
+                17,
+                new Color(181, 198, 214)
+            );
+        }
+
+        const bondPanel = this.createPanel(
+            root,
+            'BondBuildPanel',
+            540,
+            390,
+            290,
+            25,
+            new Color(32, 32, 58, 246)
+        );
+        this.createLabel(
+            bondPanel,
+            'Title',
+            `羁绊  ${selection.selectedBondIds.length} / ` +
+                `${BATTLE_BUILD_LIMITS.maxEquippedBonds}`,
+            0,
+            155,
+            29,
+            new Color(216, 170, 235)
+        );
+
+        for (let index = 0; index < selection.selectedBondIds.length; index++) {
+            const bondId = selection.selectedBondIds[index];
+            const definition = getBondDefinition(bondId);
+            const row = this.createPanel(
+                bondPanel,
+                `SelectedBond_${bondId}`,
+                470,
+                112,
+                0,
+                58 - index * 125,
+                new Color(57, 45, 79, 245)
+            );
+            this.createLabel(
+                row,
+                'Name',
+                `✓ ${definition?.bondName ?? bondId}`,
+                -85,
+                25,
+                23,
+                Color.WHITE
+            );
+            this.createLabel(
+                row,
+                'Description',
+                definition?.description ?? '强化本局整体 Build',
+                -85,
+                -8,
+                17,
+                new Color(198, 187, 214)
+            );
+            this.createLabel(
+                row,
+                'InitialLevel',
+                '进入战斗后通过绿 → 蓝 → 紫卡牌吞噬成长',
+                -85,
+                -35,
+                16,
+                new Color(235, 205, 120)
+            );
+        }
+
+        const backButtonNode = this.createPanel(
+            root,
+            'BackToMainButton',
+            210,
+            62,
+            -135,
+            -270,
+            new Color(47, 57, 77)
+        );
+        this.createLabel(
+            backButtonNode,
+            'Label',
+            '返回',
+            0,
+            0,
+            23,
+            Color.WHITE
+        );
+        const backButton = backButtonNode.addComponent(Button);
+        this.configureButton(backButton);
+        backButtonNode.on(
+            Button.EventType.CLICK,
+            () => this.closeBattleBuildConfig()
+        );
+
+        const startButtonNode = this.createPanel(
+            root,
+            'ConfirmBattleBuildButton',
+            300,
+            66,
+            135,
+            -270,
+            new Color(40, 98, 126, 250)
+        );
+        this.createLabel(
+            startButtonNode,
+            'Label',
+            '开始战斗  ›',
+            0,
+            0,
+            26,
+            new Color(255, 238, 191)
+        );
+        const startButton = startButtonNode.addComponent(Button);
+        this.configureButton(startButton);
+        startButtonNode.on(
+            Button.EventType.CLICK,
+            () => {
+                setLastBattleBuildSelection(selection);
+                this.enterBattle(selection);
+            }
+        );
+    }
+
+
+    private closeBattleBuildConfig(): void {
+        this.destroyBattleBuildConfig();
+        const main = this.node.getChildByName('MainUI');
+        if (main) {
+            main.active = true;
+        }
+    }
+
+
+    private destroyBattleBuildConfig(): void {
+        if (!this.battleConfigRoot) {
+            return;
+        }
+        this.battleConfigRoot.removeFromParent();
+        this.battleConfigRoot.destroy();
+        this.battleConfigRoot = null;
+    }
+
+
+    // =====================================================
     // 进入战斗
     // =====================================================
 
-    private enterBattle() {
+    private enterBattle(selection: BattleBuildSelection): void {
+
+        this.destroyBattleBuildConfig();
 
         // 隐藏主界面（含顶部栏 / 底部栏 / 内容区）
         const main = this.node.getChildByName('MainUI');
@@ -809,7 +1070,8 @@ export class MainUIBuilder extends Component {
         const system = battleRoot.addComponent(BattleSystem);
         system.init(
             battleUI,
-            () => this.exitBattle()
+            () => this.exitBattle(),
+            selection
         );
 
         this.battleRoot = battleRoot;
@@ -832,6 +1094,7 @@ export class MainUIBuilder extends Component {
         }
 
         this.battleRoot = null;
+        this.battleConfigRoot = null;
 
         // 重建主界面：自动刷新顶部等级 / 战力 / 金币，
         // 并回到首页（不残留战斗 Timer，BattleRoot 一并销毁）
@@ -884,7 +1147,7 @@ export class MainUIBuilder extends Component {
         this.createLabel(infoCard, 'Player', '玩家', -470, -10, 28, Color.WHITE);
         this.createLabel(infoCard, 'Level', `等级 Lv.${playerData.level}`, -170, -10, 26, Color.WHITE);
         this.createLabel(infoCard, 'Power', `战力 ${playerData.power}`, 150, -10, 26, Color.WHITE);
-        this.createLabel(infoCard, 'Faction', `当前流派：${playerData.faction}`, 460, -10, 24, new Color(235, 205, 120));
+        this.createLabel(infoCard, 'Bond', `当前羁绊：${playerData.bond}`, 460, -10, 24, new Color(235, 205, 120));
 
 
         // 基础属性卡
@@ -1831,7 +2094,7 @@ export class MainUIBuilder extends Component {
 
 
     // =====================================================
-    // 创建流派进度
+    // 创建羁绊进度
     // =====================================================
 
     createFactionProgress(

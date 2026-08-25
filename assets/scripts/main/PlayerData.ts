@@ -1,6 +1,6 @@
 import {
-    FACTION_DEFINITIONS
-} from './GameData/FactionData';
+    BOND_DEFINITIONS
+} from './GameData/BondData';
 import {
     gamePlayerData
 } from './GameData/PlayerData';
@@ -21,6 +21,8 @@ export interface PlayerData {
     def: number;
     crit: number;
     power: number;
+    bond: string;
+    /** @deprecated 旧字段名，仅供未迁移调用兼容。 */
     faction: string;
     realm: string;
     gold: number;
@@ -57,15 +59,26 @@ export const playerData: PlayerData = {
     get power() { return gamePlayerData.attributes.power; },
     set power(value) { gamePlayerData.attributes.power = value; },
 
+    get bond() {
+        return BOND_DEFINITIONS.find((item) => {
+            return item.bondId === gamePlayerData.currentBondId;
+        })?.bondName ?? gamePlayerData.currentBondId;
+    },
+    set bond(value) {
+        gamePlayerData.currentBondId = BOND_DEFINITIONS.find((item) => {
+            return item.bondId === value || item.bondName === value;
+        })?.bondId ?? value;
+    },
+
     get faction() {
-        return FACTION_DEFINITIONS.find((item) => {
-            return item.id === gamePlayerData.currentFaction;
-        })?.name ?? gamePlayerData.currentFaction;
+        return BOND_DEFINITIONS.find((item) => {
+            return item.bondId === gamePlayerData.currentBondId;
+        })?.bondName ?? gamePlayerData.currentBondId;
     },
     set faction(value) {
-        gamePlayerData.currentFaction = FACTION_DEFINITIONS.find((item) => {
-            return item.id === value || item.name === value;
-        })?.id ?? value;
+        gamePlayerData.currentBondId = BOND_DEFINITIONS.find((item) => {
+            return item.bondId === value || item.bondName === value;
+        })?.bondId ?? value;
     },
 
     get realm() { return gamePlayerData.realm; },

@@ -10,7 +10,7 @@ import type {
 } from '../GameData/CardData';
 import type { StatModifier } from '../GameData/EffectData';
 import { BATTLE_BALANCE } from '../BattleBalance';
-import { FactionSystem } from './FactionSystem';
+import { BondSystem } from './FactionSystem';
 
 
 export interface CardChoice {
@@ -37,7 +37,7 @@ interface FactionCardState {
 }
 
 
-const MAX_SKILL_SLOTS = 10;
+export const MAX_BOND_CARD_SLOTS = 10;
 
 
 export class CardSystem {
@@ -48,7 +48,82 @@ export class CardSystem {
     private choiceCount = 0;
 
 
-    constructor(private readonly factionSystem: FactionSystem) {}
+    constructor(private readonly bondSystem: BondSystem) {}
+
+
+    getBasicChoices(count = 3): CardChoice[] {
+        return this.getNormalCardChoices().slice(0, count);
+    }
+
+
+    getBondChoices(count = 3): CardChoice[] {
+        const choices: CardChoice[] = [];
+
+        for (const branch of this.bondSystem.getBranches()) {
+            const card = this.getNextFactionCard(branch.id);
+            if (card) {
+                choices.push(this.toFactionCardChoice(card));
+            }
+        }
+
+        if (choices.length < count) {
+            const bondPool = new Set(this.bondSystem.getBondCardPool());
+            for (const card of FACTION_CARDS) {
+                if (choices.length >= count) {
+                    break;
+                }
+                if (
+                    bondPool.has(card.id) &&
+                    this.canOfferFactionCard(card) &&
+                    !choices.some((choice) => choice.id === card.id)
+                ) {
+                    choices.push(this.toFactionCardChoice(card));
+                }
+            }
+        }
+
+        return choices.slice(0, count);
+    }
+
+
+    // 基础卡属于羁绊卡池：优先按“羁绊、基础、羁绊”交错展示，
+    // 任一子池不足时由另一子池补足，仍共用同一套10格吞噬空间。
+    getCombinedBondChoices(count = 3): CardChoice[] {
+        const bondChoices = this.getBondChoices(count);
+        const basicChoices = this.getBasicChoices(count);
+        const choices: CardChoice[] = [];
+        let bondIndex = 0;
+        let basicIndex = 0;
+
+        while (
+            choices.length < count &&
+            (bondIndex < bondChoices.length || basicIndex < basicChoices.length)
+        ) {
+            if (bondIndex < bondChoices.length && choices.length < count) {
+                choices.push(bondChoices[bondIndex++]);
+            }
+            if (basicIndex < basicChoices.length && choices.length < count) {
+                choices.push(basicChoices[basicIndex++]);
+            }
+        }
+
+        return choices;
+    }
+
+
+    hasBasicChoices(): boolean {
+        return this.getNormalCardChoices().length > 0;
+    }
+
+
+    hasBondChoices(): boolean {
+        return this.getBondChoices(1).length > 0;
+    }
+
+
+    hasCombinedBondChoices(): boolean {
+        return this.hasBondChoices() || this.hasBasicChoices();
+    }
 
 
     getChoices(count = 3): CardChoice[] {
@@ -61,7 +136,7 @@ export class CardSystem {
         if (offerNormalCards) {
             choices.push(...this.getNormalCardChoices());
         } else {
-            for (const branch of this.factionSystem.getBranches()) {
+            for (const branch of this.bondSystem.getBranches()) {
                 const card = this.getNextFactionCard(branch.id);
                 if (card) {
                     choices.push(this.toFactionCardChoice(card));
@@ -71,7 +146,7 @@ export class CardSystem {
 
         if (choices.length < count) {
             const factionPool = new Set(
-                this.factionSystem.getFactionCardPool()
+                this.bondSystem.getBondCardPool()
             );
             const fallback = [
                 ...this.getNormalCardChoices(),
@@ -125,7 +200,7 @@ export class CardSystem {
             if (state.kills >= state.definition.requiredKills) {
                 completedThisKill.push(id);
                 messages.push(
-                    `${state.definition.quality}神将【${state.definition.name}】归位，释放技能槽！`
+                    `${state.definition.quality}羁绊卡【${state.definition.name}】吞噬归位，释放卡槽！`
                 );
             }
         });
@@ -135,7 +210,7 @@ export class CardSystem {
             this.completedFactionCards.add(id);
         }
 
-        const factionProgress = this.factionSystem.syncCardProgress(
+        const factionProgress = this.bondSystem.syncCardProgress(
             this.completedFactionCards
         );
 
@@ -165,14 +240,14 @@ export class CardSystem {
             );
         });
 
-        slots.push(...this.factionSystem.getSlotDescriptions());
+        slots.push(...this.bondSystem.getSlotDescriptions());
         return slots;
     }
 
 
-    // 兼容旧调用；流派进度的真实归属已经迁移到 FactionSystem。
+    // 兼容旧调用；这里的 Faction 是“羁绊”的旧代码名称。
     getProgressText(): string {
-        return this.factionSystem.getProgressText();
+        return this.bondSystem.getProgressText();
     }
 
 
@@ -186,7 +261,7 @@ export class CardSystem {
                 const nextLevel = level + 1;
                 const completesCard = nextLevel === card.maxLevel;
                 return level < card.maxLevel &&
-                    (completesCard || usedSlots < MAX_SKILL_SLOTS);
+                    (completesCard || usedSlots < MAX_BOND_CARD_SLOTS);
             })
             .map((card) => {
                 const level = this.normalCardLevels.get(card.id) ?? 0;
@@ -203,7 +278,7 @@ export class CardSystem {
     private getNextFactionCard(
         branchId: FactionCardDefinition['branchId']
     ): FactionCardDefinition | undefined {
-        const factionPool = new Set(this.factionSystem.getFactionCardPool());
+        const factionPool = new Set(this.bondSystem.getBondCardPool());
         return FACTION_CARDS.find((card) => {
             return factionPool.has(card.id) &&
                 card.branchId === branchId &&
@@ -213,12 +288,12 @@ export class CardSystem {
 
 
     private canOfferFactionCard(card: FactionCardDefinition): boolean {
-        return !this.factionSystem.isUltimateActive() &&
-            !this.factionSystem.isBranchStrengtheningActive(card.branchId) &&
+        return !this.bondSystem.isUltimateActive() &&
+            !this.bondSystem.isBranchStrengtheningActive(card.branchId) &&
             this.isQualityUnlocked(card) &&
             !this.activeFactionCards.has(card.id) &&
             !this.completedFactionCards.has(card.id) &&
-            this.getUsedSlotCount() < MAX_SKILL_SLOTS;
+            this.getUsedSlotCount() < MAX_BOND_CARD_SLOTS;
     }
 
 
@@ -245,7 +320,7 @@ export class CardSystem {
 
 
     private getBranchCards(card: FactionCardDefinition): FactionCardDefinition[] {
-        const factionPool = new Set(this.factionSystem.getFactionCardPool());
+        const factionPool = new Set(this.bondSystem.getBondCardPool());
         return FACTION_CARDS.filter((item) => {
             return factionPool.has(item.id) && item.branchId === card.branchId;
         });
@@ -256,7 +331,7 @@ export class CardSystem {
         return {
             id: card.id,
             name: `${card.quality}·${card.name}`,
-            description: `${card.role} · 击杀${card.requiredKills}个敌人后归位`,
+            description: `${card.role} · 击杀${card.requiredKills}个敌人后吞噬归位`,
             category: card.category
         };
     }
@@ -273,8 +348,8 @@ export class CardSystem {
         const nextLevel = currentLevel + 1;
         const completesCard = nextLevel === card.maxLevel;
 
-        if (!completesCard && this.getUsedSlotCount() >= MAX_SKILL_SLOTS) {
-            return { success: false, message: '技能槽已满' };
+        if (!completesCard && this.getUsedSlotCount() >= MAX_BOND_CARD_SLOTS) {
+            return { success: false, message: '羁绊卡槽已满' };
         }
 
         this.normalCardLevels.set(card.id, nextLevel);
@@ -282,7 +357,7 @@ export class CardSystem {
         return {
             success: true,
             message: nextLevel === card.maxLevel
-                ? `${card.name} III 吞噬完成，释放 ${card.maxLevel - 1} 个技能槽！`
+                ? `${card.name} III 吞噬完成，释放 ${card.maxLevel - 1} 个卡槽！`
                 : `获得 ${card.name} ${this.toRoman(nextLevel)}`,
             bonus: card.bonus
         };
@@ -302,7 +377,7 @@ export class CardSystem {
 
         return {
             success: true,
-            message: `获得${card.quality}神将【${card.name}】，开始累计击杀`
+            message: `获得${card.quality}羁绊卡【${card.name}】，开始累计击杀吞噬`
         };
     }
 
@@ -310,7 +385,7 @@ export class CardSystem {
     private getUsedSlotCount(): number {
 
         let count = this.activeFactionCards.size +
-            this.factionSystem.getOccupiedSlotCount();
+            this.bondSystem.getOccupiedSlotCount();
 
         this.normalCardLevels.forEach((level, id) => {
             const card = NORMAL_CARDS.find((item) => item.id === id);
