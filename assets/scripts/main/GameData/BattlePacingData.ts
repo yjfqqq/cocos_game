@@ -19,9 +19,9 @@ export const BATTLE_PACING = {
     normalSkillExpReward: 1,
     bossSkillExpReward: 30,
     elite: {
-        hpMultiplier: 4.5,
-        attackMultiplier: 1.6,
-        defenseBonus: 2,
+        hpMultiplier: 3.8,
+        attackMultiplier: 1.4,
+        defenseBonus: 1,
         expReward: 25,
         goldReward: 10,
         skillExpReward: 15

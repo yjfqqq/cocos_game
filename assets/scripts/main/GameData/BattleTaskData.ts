@@ -32,7 +32,7 @@ export const FIRST_STAGE_TASKS: BattleTaskConfig[] = [
         hardCap: 20,
         spawnBatchSize: 4,
         normalExpMultiplier: 1,
-        taskExpReward: 300,
+        taskExpReward: 50,
         eliteSpawnKillThresholds: []
     },
     {
@@ -44,8 +44,8 @@ export const FIRST_STAGE_TASKS: BattleTaskConfig[] = [
         targetOnScreen: 20,
         hardCap: 32,
         spawnBatchSize: 5,
-        normalExpMultiplier: 3,
-        taskExpReward: 800,
+        normalExpMultiplier: 0.5,
+        taskExpReward: 250,
         eliteSpawnKillThresholds: [15, 55]
     },
     {
@@ -57,8 +57,8 @@ export const FIRST_STAGE_TASKS: BattleTaskConfig[] = [
         targetOnScreen: 34,
         hardCap: 50,
         spawnBatchSize: 7,
-        normalExpMultiplier: 7,
-        taskExpReward: 2500,
+        normalExpMultiplier: 1,
+        taskExpReward: 0,
         eliteSpawnKillThresholds: [45, 110, 160]
     },
     {
@@ -70,13 +70,13 @@ export const FIRST_STAGE_TASKS: BattleTaskConfig[] = [
         targetOnScreen: 28,
         hardCap: 46,
         spawnBatchSize: 6,
-        normalExpMultiplier: 14,
-        taskExpReward: 9000,
+        normalExpMultiplier: 0.75,
+        taskExpReward: 1000,
         eliteSpawnKillThresholds: [],
         supportMonsterLimit: 60,
         bossHpMultiplier: 1.8,
         bossAttackMultiplier: 0.45,
-        bossExpReward: 4500
+        bossExpReward: 300
     },
     {
         id: 5,
@@ -87,8 +87,8 @@ export const FIRST_STAGE_TASKS: BattleTaskConfig[] = [
         targetOnScreen: 55,
         hardCap: 80,
         spawnBatchSize: 10,
-        normalExpMultiplier: 22,
-        taskExpReward: 11000,
+        normalExpMultiplier: 0.6,
+        taskExpReward: 205,
         eliteSpawnKillThresholds: [40, 90, 140, 190, 230],
         bossHpMultiplier: 3,
         bossAttackMultiplier: 0.3,

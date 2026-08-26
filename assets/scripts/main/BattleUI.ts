@@ -15,6 +15,25 @@ import type {
     UpgradeCardKind
 } from './Systems/UpgradeCardGenerator';
 
+export interface UpgradePanelOptions {
+    title?: string;
+    statusText?: string;
+    refreshText?: string;
+}
+
+export interface BattleDebugActions {
+    addExp: () => void;
+    forceLevelUp: () => void;
+    addSpiritStones: () => void;
+    forceSkillChoice: () => void;
+    forceBondDraw: () => void;
+    cycleMetaLevel: () => void;
+    inspectSkillNodes: () => void;
+    inspectBondCards: () => void;
+    inspectWeights: () => void;
+    resetBuild: () => void;
+}
+
 export interface EnemyViewData {
     id: number;
     name: string;
@@ -68,6 +87,14 @@ export class BattleUI {
     private skillSlotLabels: Label[] = [];
     private bondSlotLabels: Label[] = [];
     private bondSlotTitle!: Label;
+    private spiritStoneText!: Label;
+    private comboText!: Label;
+    private bondDrawCostText!: Label;
+    private bondDrawButton: Button | null = null;
+    private bondDrawHandler: () => void = () => {};
+    private debugActions: BattleDebugActions | null = null;
+    private debugPanel: Node | null = null;
+    private debugButtonCreated = false;
     private cardChoicePanel: Node | null = null;
     private upgradeCategoryPanel: Node | null = null;
     private upgradeTitleLabel: Label | null = null;
@@ -347,12 +374,51 @@ export class BattleUI {
         this.bondSlotTitle = this.createLabel(
             bondHud,
             'Title',
-            '羁绊卡槽  0 / 10',
-            0,
+            '羁绊 0张',
+            -185,
             38,
             17,
             new Color(202, 174, 226)
         );
+        this.spiritStoneText = this.createLabel(
+            bondHud,
+            'SpiritStones',
+            '灵石 0',
+            -65,
+            38,
+            16,
+            new Color(113, 220, 221)
+        );
+        this.comboText = this.createLabel(
+            bondHud,
+            'Combo',
+            'Combo 0',
+            55,
+            38,
+            15,
+            new Color(244, 166, 96)
+        );
+        const drawNode = this.createPanel(
+            bondHud,
+            'BondDrawButton',
+            128,
+            38,
+            184,
+            37,
+            new Color(91, 57, 120)
+        );
+        this.bondDrawCostText = this.createLabel(
+            drawNode,
+            'Label',
+            '羁绊抽卡 50',
+            0,
+            0,
+            15,
+            Color.WHITE
+        );
+        this.bondDrawButton = drawNode.addComponent(Button);
+        this.bondDrawButton.transition = Button.Transition.NONE;
+        drawNode.on(Button.EventType.CLICK, () => this.bondDrawHandler());
         this.bondSlotLabels = [];
         const bondSlotStartX = -220;
         for (let i = 0; i < 10; i++) {
@@ -515,6 +581,51 @@ export class BattleUI {
         }
     }
 
+
+    setBondDrawHandler(handler: () => void): void {
+        this.bondDrawHandler = handler;
+    }
+
+
+    updateGrowthResources(
+        spiritStones: number,
+        drawCost: number,
+        combo: number
+    ): void {
+        this.spiritStoneText.string = `灵石 ${spiritStones}`;
+        this.comboText.string = `Combo ${combo}`;
+        this.bondDrawCostText.string = `羁绊抽卡 ${drawCost}`;
+        if (this.bondDrawButton) {
+            this.bondDrawButton.interactable = spiritStones >= drawCost;
+            this.bondDrawCostText.color = spiritStones >= drawCost
+                ? Color.WHITE
+                : new Color(135, 138, 150);
+        }
+    }
+
+
+    // 正式HUD只保留一个小型 DEV 入口，调试按钮默认折叠。
+    setDebugActions(actions: BattleDebugActions): void {
+        this.debugActions = actions;
+        if (this.debugButtonCreated) {
+            return;
+        }
+        this.debugButtonCreated = true;
+        const node = this.createPanel(
+            this.root,
+            'DebugToggle',
+            54,
+            30,
+            600,
+            302,
+            new Color(50, 55, 68, 225)
+        );
+        this.createLabel(node, 'Label', 'DEV', 0, 0, 13, Color.WHITE);
+        const button = node.addComponent(Button);
+        button.transition = Button.Transition.NONE;
+        node.on(Button.EventType.CLICK, () => this.toggleDebugPanel());
+    }
+
     addLog(text: string): void {
 
         this.logs.push(text);
@@ -528,7 +639,7 @@ export class BattleUI {
 
 
     // =====================================================
-    // 非暂停式升级：先选“技能 / 羁绊”，再进入对应卡池。
+    // 旧升级分类入口保留兼容；V1战斗已改为技能自动弹出、羁绊主动抽卡。
     // =====================================================
 
     showUpgradeCategoryPrompt(
@@ -588,7 +699,8 @@ export class BattleUI {
         onSelect: (choice: UpgradeCard) => void,
         onBack: () => void,
         refreshesRemaining = 0,
-        onRefresh?: () => void
+        onRefresh?: () => void,
+        options: UpgradePanelOptions = {}
     ): void {
         this.hideUpgradeUI();
 
@@ -612,7 +724,7 @@ export class BattleUI {
         this.upgradeTitleLabel = this.createLabel(
             panel,
             'Title',
-            `${cardTitle} · 待选择 ×${pendingLevelUps}`,
+            options.title ?? `${cardTitle} · 待选择 ×${pendingLevelUps}`,
             0,
             184,
             28,
@@ -621,7 +733,7 @@ export class BattleUI {
         this.createLabel(
             panel,
             'RunningHint',
-            '战斗仍在继续',
+            options.statusText ?? '战斗仍在继续',
             -490,
             184,
             15,
@@ -668,7 +780,7 @@ export class BattleUI {
             this.createLabel(
                 refreshNode,
                 'Label',
-                `刷新（剩余 ${refreshesRemaining}）`,
+                options.refreshText ?? `刷新（剩余 ${refreshesRemaining}）`,
                 0,
                 0,
                 16,
@@ -700,19 +812,11 @@ export class BattleUI {
                 310,
                 positions[i],
                 -5,
-                choice.kind === 'bond'
-                    ? new Color(48, 38, 65, 252)
-                    : choice.kind === 'basic'
-                        ? new Color(64, 48, 29, 252)
-                        : new Color(29, 42, 58, 252)
+                this.getUpgradeCardBackground(choice)
             );
             const cardGraphics = card.getComponent(Graphics);
             if (cardGraphics) {
-                cardGraphics.strokeColor = choice.kind === 'bond'
-                    ? new Color(194, 137, 229)
-                    : choice.kind === 'basic'
-                        ? new Color(226, 179, 96)
-                        : new Color(95, 184, 224);
+                cardGraphics.strokeColor = this.getUpgradeCardStroke(choice);
                 cardGraphics.lineWidth = 3;
                 cardGraphics.rect(-123, -153, 246, 306);
                 cardGraphics.stroke();
@@ -722,9 +826,9 @@ export class BattleUI {
                 card,
                 'Category',
                 choice.kind === 'skill'
-                    ? '技能强化'
+                    ? this.getSkillRarityName(choice.rarity)
                     : choice.kind === 'bond'
-                        ? '天宫羁绊'
+                        ? this.getBondRarityName(choice.rarity)
                         : '基础属性',
                 0,
                 128,
@@ -744,6 +848,18 @@ export class BattleUI {
                 25,
                 Color.WHITE
             );
+
+            if (choice.progress) {
+                this.createLabel(
+                    card,
+                    'Progress',
+                    choice.progress,
+                    0,
+                    102,
+                    14,
+                    new Color(235, 205, 120)
+                );
+            }
 
             const description = this.createLabel(
                 card,
@@ -804,12 +920,15 @@ export class BattleUI {
                 : new Color(130, 128, 145);
         }
         this.bondSlotTitle.string =
-            `羁绊卡槽  ${Math.min(10, slots.length)} / 10`;
+            `羁绊 ${slots.length}张`;
     }
 
 
     updatePendingUpgradeCount(pendingLevelUps: number): void {
-        if (this.upgradeTitleLabel) {
+        if (
+            this.upgradeTitleLabel &&
+            this.upgradeTitleLabel.string.indexOf('待选择') >= 0
+        ) {
             const prefix = this.upgradeTitleLabel.string.split(' · ')[0];
             this.upgradeTitleLabel.string =
                 `${prefix} · 待选择 ×${pendingLevelUps}`;
@@ -848,6 +967,156 @@ export class BattleUI {
         this.upgradeCategoryPanel.destroy();
         this.upgradeCategoryPanel = null;
         this.pendingUpgradeLabel = null;
+    }
+
+
+    private toggleDebugPanel(): void {
+        if (this.debugPanel) {
+            this.debugPanel.removeFromParent();
+            this.debugPanel.destroy();
+            this.debugPanel = null;
+            return;
+        }
+        const panel = this.createPanel(
+            this.root,
+            'BattleDebugPanel',
+            430,
+            350,
+            385,
+            105,
+            new Color(15, 20, 31, 248)
+        );
+        this.debugPanel = panel;
+        this.createLabel(
+            panel,
+            'Title',
+            '开发调试 · 单局状态',
+            0,
+            145,
+            20,
+            new Color(235, 205, 120)
+        );
+        const buttons: Array<{
+            label: string;
+            action: keyof BattleDebugActions;
+        }> = [
+            { label: '+100经验', action: 'addExp' },
+            { label: '强制升级', action: 'forceLevelUp' },
+            { label: '+1000灵石', action: 'addSpiritStones' },
+            { label: '技能选择', action: 'forceSkillChoice' },
+            { label: '羁绊抽卡', action: 'forceBondDraw' },
+            { label: '切换局外等级', action: 'cycleMetaLevel' },
+            { label: '查看技能节点', action: 'inspectSkillNodes' },
+            { label: '查看羁绊卡', action: 'inspectBondCards' },
+            { label: '查看动态权重', action: 'inspectWeights' },
+            { label: '重置本局构筑', action: 'resetBuild' }
+        ];
+        for (let index = 0; index < buttons.length; index++) {
+            const item = buttons[index];
+            const column = index % 2;
+            const row = Math.floor(index / 2);
+            this.createDebugActionButton(
+                panel,
+                item.label,
+                -105 + column * 210,
+                95 - row * 55,
+                item.action
+            );
+        }
+    }
+
+
+    private createDebugActionButton(
+        parent: Node,
+        label: string,
+        x: number,
+        y: number,
+        action: keyof BattleDebugActions
+    ): void {
+        const node = this.createPanel(
+            parent,
+            `Debug_${action}`,
+            180,
+            42,
+            x,
+            y,
+            new Color(47, 68, 91)
+        );
+        this.createLabel(node, 'Label', label, 0, 0, 15, Color.WHITE);
+        const button = node.addComponent(Button);
+        button.transition = Button.Transition.NONE;
+        node.on(Button.EventType.CLICK, () => {
+            const handler = this.debugActions?.[action];
+            if (handler) {
+                handler();
+            }
+        });
+    }
+
+
+    private getSkillRarityName(rarity?: string): string {
+        const names: Record<string, string> = {
+            basic: '基础技能节点',
+            core3: 'Lv3核心节点',
+            core6: 'Lv6核心节点',
+            core9: 'Lv9核心节点',
+            core10: 'Lv10终极节点'
+        };
+        return names[rarity ?? ''] ?? '技能强化';
+    }
+
+
+    private getBondRarityName(rarity?: string): string {
+        const names: Record<string, string> = {
+            green: '绿色羁绊',
+            blue: '蓝色羁绊',
+            purple: '紫色羁绊',
+            red: '红色羁绊',
+            rainbow: '彩色羁绊'
+        };
+        return names[rarity ?? ''] ?? '羁绊卡';
+    }
+
+
+    private getUpgradeCardBackground(choice: UpgradeCard): Color {
+        if (choice.rarity === 'core10' || choice.rarity === 'rainbow') {
+            return new Color(72, 45, 84, 252);
+        }
+        if (choice.rarity === 'core9' || choice.rarity === 'red') {
+            return new Color(82, 38, 45, 252);
+        }
+        if (choice.rarity === 'core6' || choice.rarity === 'purple') {
+            return new Color(55, 39, 76, 252);
+        }
+        if (choice.rarity === 'core3' || choice.rarity === 'blue') {
+            return new Color(31, 55, 79, 252);
+        }
+        if (choice.rarity === 'green') {
+            return new Color(31, 67, 55, 252);
+        }
+        return choice.kind === 'basic'
+            ? new Color(64, 48, 29, 252)
+            : new Color(29, 42, 58, 252);
+    }
+
+
+    private getUpgradeCardStroke(choice: UpgradeCard): Color {
+        if (choice.rarity === 'core10' || choice.rarity === 'rainbow') {
+            return new Color(242, 198, 92);
+        }
+        if (choice.rarity === 'core9' || choice.rarity === 'red') {
+            return new Color(238, 96, 105);
+        }
+        if (choice.rarity === 'core6' || choice.rarity === 'purple') {
+            return new Color(194, 137, 229);
+        }
+        if (choice.rarity === 'core3' || choice.rarity === 'blue') {
+            return new Color(95, 184, 224);
+        }
+        if (choice.rarity === 'green') {
+            return new Color(102, 205, 149);
+        }
+        return new Color(95, 184, 224);
     }
 
 

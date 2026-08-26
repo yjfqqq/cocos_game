@@ -57,8 +57,7 @@ export const gamePlayerData: PlayerData = {
     skills: [
         {
             skillId: 'normal-attack',
-            // 当前测试阶段直接解锁普攻完整机制。
-            level: 10,
+            level: 1,
             fragments: 0,
             exp: 0
         }
@@ -73,3 +72,22 @@ export const gamePlayerData: PlayerData = {
     gold: 0,
     diamond: 0
 };
+
+
+// 旧存档缺少技能数组或普攻记录时按 Lv1 补齐，不覆盖已有培养等级。
+export function getOrCreatePlayerSkillState(
+    data: PlayerData,
+    skillId: string
+): PlayerSkillState {
+    if (!Array.isArray(data.skills)) {
+        data.skills = [];
+    }
+    let state = data.skills.find((skill) => skill.skillId === skillId);
+    if (!state) {
+        state = { skillId, level: 1, fragments: 0, exp: 0 };
+        data.skills.push(state);
+    }
+    state.level = Math.max(1, Math.min(10, Math.floor(state.level || 1)));
+    state.fragments = Math.max(0, Math.floor(state.fragments || 0));
+    return state;
+}

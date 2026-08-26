@@ -4,7 +4,10 @@ import { addGold } from './PlayerData';
 import { BattleUI } from './BattleUI';
 import type { EnemyViewData } from './BattleUI';
 
-import { gamePlayerData } from './GameData/PlayerData';
+import {
+    gamePlayerData,
+    getOrCreatePlayerSkillState
+} from './GameData/PlayerData';
 import {
     BATTLE_PACING,
     getBattleWaveCount
@@ -25,22 +28,19 @@ import type {
     BattleBuildSelection
 } from './GameData/BattleBuildData';
 import {
-    getNormalAttackRuntimeConfig,
+    BATTLE_SKILL_UPGRADES,
+    getBattleNormalAttackRuntimeConfig,
     getSkillDefinition,
     NORMAL_ATTACK_SKILL_ID
 } from './GameData/SkillData';
-import {
-    getBondDefinition
-} from './GameData/BondData';
 import { UpgradeManager } from './Systems/UpgradeManager';
 import type {
-    UpgradeCard,
-    UpgradeCardKind
+    UpgradeCard
 } from './Systems/UpgradeCardGenerator';
 import { UpgradeCardGenerator } from './Systems/UpgradeCardGenerator';
-import { CardSystem } from './Systems/CardSystem';
-import type { CardChoice } from './Systems/CardSystem';
-import { BondSystem } from './Systems/FactionSystem';
+import { BondGrowthSystem } from './Systems/BondGrowthSystem';
+import type { BondGrowthChoice } from './Systems/BondGrowthSystem';
+import { saveSkillProgress } from './Systems/PlayerProgressStorage';
 
 import { BattleRunData } from './BattleRunData';
 
@@ -333,8 +333,7 @@ export class BattleSystem extends Component {
     private buildRuntime!: BattleBuildRuntime;
     private upgradeManager!: UpgradeManager;
     private upgradeCardGenerator!: UpgradeCardGenerator;
-    private battleCardSystem!: CardSystem;
-    private bondSystem!: BondSystem;
+    private bondGrowthSystem!: BondGrowthSystem;
     private equipmentSystem!: EquipmentSystem;
     private enemies: MonsterData[] = [];
 
@@ -353,8 +352,6 @@ export class BattleSystem extends Component {
     private nextEliteThresholdIndex = 0;
     private finalBossPhase = false;
     private taskBossId: number | null = null;
-    private freeRefreshesRemaining = BATTLE_BALANCE.freeRefreshesPerRun;
-    private normalAttackCounter = 0;
     private awakeningCounter = 0;
 
     private isPaused = false;
@@ -372,19 +369,13 @@ export class BattleSystem extends Component {
         this.buildSelection = normalizeBattleBuildSelection(selection);
         this.buildRuntime = createBattleBuildRuntime(this.buildSelection);
         for (const skillId of this.buildRuntime.selectedSkillIds) {
-            const persistentSkill = gamePlayerData.skills.find((skill) => {
-                return skill.skillId === skillId;
-            });
-            this.buildRuntime.skillLevels[skillId] = Math.max(
-                1,
-                persistentSkill?.level ?? 1
-            );
+            this.buildRuntime.skillMetaLevels[skillId] =
+                getOrCreatePlayerSkillState(gamePlayerData, skillId).level;
         }
         this.equipmentSystem = new EquipmentSystem(gamePlayerData.equipment);
         this.runData = new BattleRunData(
             this.equipmentSystem.calculateAttributes(gamePlayerData.attributes)
         );
-        this.applyInitialBuildEffects();
         this.upgradeManager = new UpgradeManager(
             this.runData,
             this.buildRuntime
@@ -392,10 +383,7 @@ export class BattleSystem extends Component {
         this.upgradeCardGenerator = new UpgradeCardGenerator(
             this.buildRuntime
         );
-        this.bondSystem = new BondSystem(
-            this.buildRuntime.selectedBondIds[0]
-        );
-        this.battleCardSystem = new CardSystem(this.bondSystem);
+        this.bondGrowthSystem = new BondGrowthSystem();
         this.currentWave = 1;
         this.totalExpReward = 0;
         this.totalGoldReward = 0;
@@ -403,13 +391,12 @@ export class BattleSystem extends Component {
         this.battleComplete = false;
         this.nextSpawnLane = 0;
         this.upgradeChoicesVisible = false;
-        this.freeRefreshesRemaining = BATTLE_BALANCE.freeRefreshesPerRun;
-        this.normalAttackCounter = 0;
         this.awakeningCounter = 0;
         this.currentPlayerHp = this.runData.maxHp;
         this.isPaused = false;
         this.enemies = [];
         this.battleUI.hideUpgradeUI();
+        this.bindBattleUIActions();
         this.startTask(1, false);
 
         this.updateRunUI();
@@ -487,9 +474,10 @@ export class BattleSystem extends Component {
             return;
         }
         const attackTaskId = this.currentWave;
-        const normalAttackLevel =
-            this.buildRuntime.skillLevels[NORMAL_ATTACK_SKILL_ID] ?? 1;
-        const config = getNormalAttackRuntimeConfig(normalAttackLevel);
+        const config = this.getNormalAttackConfig();
+        const bondAttack = this.bondGrowthSystem.recordNormalAttack(
+            Date.now() / 1000
+        );
         const awakeningReady = config.awakeningAttackInterval > 0 &&
             this.awakeningCounter >= config.awakeningAttackInterval;
         const targetCount = awakeningReady
@@ -524,33 +512,66 @@ export class BattleSystem extends Component {
 
         if (awakeningReady) {
             this.awakeningCounter = 0;
-            this.battleUI.addLog('Lv10【火力全开】发动！');
+            this.battleUI.addLog('【终极觉醒】强化齐射！');
         } else if (!this.battleComplete && this.currentWave === attackTaskId) {
-            this.normalAttackCounter++;
             this.awakeningCounter++;
+        }
 
-            if (
-                config.comboAttackInterval > 0 &&
-                this.normalAttackCounter >= config.comboAttackInterval
-            ) {
-                this.normalAttackCounter = 0;
-                const comboCandidates = this.getVisibleLivingEnemies();
-                const comboTarget = comboCandidates[0];
-                if (comboTarget) {
-                    const comboUnavailable = new Set<number>([comboTarget.id]);
-                    defeatedCount += this.executeNormalAttackProjectile(
-                        comboTarget,
-                        config.comboDamageMultiplier,
-                        comboCandidates,
-                        comboUnavailable,
+        if (
+            bondAttack.extraAttack &&
+            !this.battleComplete &&
+            this.currentWave === attackTaskId
+        ) {
+            const extraCandidates = this.getVisibleLivingEnemies();
+            const extraTarget = extraCandidates[0];
+            if (extraTarget) {
+                const unavailable = new Set<number>([extraTarget.id]);
+                defeatedCount += bondAttack.extraAttackTriggersEffects
+                    ? this.executeNormalAttackProjectile(
+                        extraTarget,
+                        bondAttack.extraDamageMultiplier,
+                        extraCandidates,
+                        unavailable,
                         attackedIds,
                         config,
                         attackTaskId
+                    )
+                    : this.dealNormalAttackDamage(
+                        extraTarget,
+                        bondAttack.extraDamageMultiplier,
+                        config.damageMultiplier,
+                        attackedIds
                     );
-                    this.battleUI.addLog('Lv5【连击】追加攻击！');
-                }
             }
         }
+
+        if (
+            bondAttack.areaStrikeTargets > 0 &&
+            !this.battleComplete &&
+            this.currentWave === attackTaskId
+        ) {
+            const areaTargets = this.getVisibleLivingEnemies().slice(
+                0,
+                bondAttack.areaStrikeTargets
+            );
+            for (const target of areaTargets) {
+                defeatedCount += this.dealNormalAttackDamage(
+                    target,
+                    bondAttack.areaStrikeDamageMultiplier,
+                    config.damageMultiplier,
+                    attackedIds
+                );
+            }
+        }
+        for (const message of bondAttack.messages) {
+            this.battleUI.addLog(message);
+        }
+
+        this.battleUI.updateGrowthResources(
+            this.bondGrowthSystem.getSpiritStones(),
+            this.bondGrowthSystem.getDrawCost(),
+            bondAttack.combo
+        );
 
         this.battleUI.playPlayerAttack(
             attackedIds.filter((id, index, ids) => ids.indexOf(id) === index)
@@ -581,7 +602,7 @@ export class BattleSystem extends Component {
         candidates: MonsterData[],
         unavailable: Set<number>,
         attackedIds: number[],
-        config: ReturnType<typeof getNormalAttackRuntimeConfig>,
+        config: ReturnType<typeof getBattleNormalAttackRuntimeConfig>,
         taskId: number
     ): number {
         let defeatedCount = this.dealNormalAttackDamage(
@@ -609,6 +630,30 @@ export class BattleSystem extends Component {
                 attackedIds
             );
         }
+
+        for (let index = 0; index < config.splitExtraAttacks; index++) {
+            if (this.battleComplete || this.currentWave !== taskId) {
+                break;
+            }
+            const sourceX = target.positionX ?? 0;
+            const splitTarget = candidates.find((candidate) => {
+                const candidateX = candidate.positionX ?? 0;
+                return candidate.hp > 0 &&
+                    !unavailable.has(candidate.id) &&
+                    (config.splitTracksTargets ||
+                        Math.abs(candidateX - sourceX) <= 160);
+            });
+            if (!splitTarget) {
+                break;
+            }
+            unavailable.add(splitTarget.id);
+            defeatedCount += this.dealNormalAttackDamage(
+                splitTarget,
+                damageMultiplier * config.splitDamageMultiplier,
+                config.damageMultiplier,
+                attackedIds
+            );
+        }
         return defeatedCount;
     }
 
@@ -628,6 +673,7 @@ export class BattleSystem extends Component {
                 sourceMultiplier *
                 permanentSkillMultiplier *
                 this.runData.skillDamageMultiplier *
+                this.bondGrowthSystem.getCombatDamageMultiplier() *
                 (isCritical ? this.runData.critDamageMultiplier : 1) *
                 (0.9 + Math.random() * 0.2)
             )
@@ -744,21 +790,15 @@ export class BattleSystem extends Component {
         this.totalExpReward += enemy.expReward;
         this.totalGoldReward += enemy.goldReward;
 
-        const previousAttackInterval = this.runData.attackInterval;
-        const cardProgress = this.battleCardSystem.recordKill();
-        for (const bonus of cardProgress.bonuses) {
-            const oldMaxHp = this.runData.maxHp;
-            this.runData.applyBonus(bonus);
-            this.currentPlayerHp += Math.max(
-                0,
-                this.runData.maxHp - oldMaxHp
+        const spiritReward = this.bondGrowthSystem.grantEnemyReward(
+            enemy.isElite,
+            enemy.isBoss
+        );
+        if (spiritReward.amount > 0 && (enemy.isElite || enemy.isBoss)) {
+            this.battleUI.addLog(
+                `${enemy.isBoss ? '首领' : '精英'}掉落灵石 ×` +
+                `${spiritReward.amount}`
             );
-        }
-        for (const message of cardProgress.messages) {
-            this.battleUI.addLog(message);
-        }
-        if (this.runData.attackInterval !== previousAttackInterval) {
-            this.refreshPlayerAttackTimer();
         }
 
         this.battleUI.removeEnemy(enemy.id);
@@ -791,50 +831,26 @@ export class BattleSystem extends Component {
             return;
         }
 
-        this.upgradeChoicesVisible = true;
-        this.battleUI.showUpgradeCategoryPrompt(
-            pendingLevelUps,
-            this.upgradeCardGenerator.hasAvailableCards('skill'),
-            true,
-            (kind) => this.showUpgradeChoices(kind)
+        const choices = this.upgradeCardGenerator.generateUpgradeCards(
+            BATTLE_BALANCE.skillChoiceCount,
+            'skill'
         );
-    }
-
-
-    private showUpgradeChoices(kind: UpgradeCardKind): void {
-        const choices = kind === 'skill'
-            ? this.upgradeCardGenerator.generateUpgradeCards(
-                BATTLE_BALANCE.bondChoiceCount,
-                'skill'
-            )
-            : this.getBattleCardChoices();
-
         if (choices.length === 0) {
-            this.upgradeChoicesVisible = false;
-            this.showPendingUpgradeChoices();
+            this.upgradeManager.clearPendingLevelUps();
+            this.battleUI.addLog('本局技能树已无可选节点');
             return;
         }
 
+        this.upgradeChoicesVisible = true;
         this.battleUI.showUpgradeCards(
             choices,
-            this.upgradeManager.getPendingLevelUps(),
+            pendingLevelUps,
             (choice) => this.onUpgradeSelected(choice),
             () => {
                 this.upgradeChoicesVisible = false;
                 this.battleUI.hideUpgradeUI();
-            },
-            this.freeRefreshesRemaining,
-            () => this.refreshUpgradeChoices(kind)
+            }
         );
-    }
-
-
-    private refreshUpgradeChoices(kind: UpgradeCardKind): void {
-        if (this.freeRefreshesRemaining <= 0) {
-            return;
-        }
-        this.freeRefreshesRemaining--;
-        this.showUpgradeChoices(kind);
     }
 
 
@@ -842,23 +858,7 @@ export class BattleSystem extends Component {
         this.upgradeChoicesVisible = false;
         const previousAttackInterval = this.runData.attackInterval;
         const previousMaxHp = this.runData.maxHp;
-        const result = choice.kind === 'skill'
-            ? {
-                success: true,
-                message: `获得本局技能强化【${choice.name}】`,
-                bonus: choice.bonus
-            }
-            : choice.sourceId.startsWith('fallback:')
-            ? {
-                success: true,
-                message: `获得通用成长【${choice.name}】`,
-                bonus: choice.bonus
-            }
-            : this.battleCardSystem.selectCard(choice.sourceId);
-
-        if (result.success) {
-            this.upgradeManager.consumePendingLevelUp();
-        }
+        const result = this.upgradeManager.selectUpgrade(choice);
 
         if (result.success && result.bonus) {
             this.runData.applyBonus(result.bonus);
@@ -882,78 +882,93 @@ export class BattleSystem extends Component {
     }
 
 
-    private getBattleCardChoices(): UpgradeCard[] {
-        const choices = this.battleCardSystem.getCombinedBondChoices(
-            BATTLE_BALANCE.bondChoiceCount
-        );
-        const cards = choices.map((choice) => {
-            const cardKind: UpgradeCardKind = choice.category === '基础卡'
-                ? 'basic'
-                : 'bond';
-            return this.toUpgradeCard(choice, cardKind);
-        });
-
-        const fallbackCards: UpgradeCard[] = [
-            {
-                id: 'basic:fallback-attack',
-                kind: 'basic',
-                sourceId: 'fallback:attack',
-                name: '即时攻势',
-                description: '本局攻击 +3%',
-                nextLevel: 0,
-                bonus: { attackPercent: 3 }
-            },
-            {
-                id: 'basic:fallback-health',
-                kind: 'basic',
-                sourceId: 'fallback:health',
-                name: '即时护体',
-                description: '本局最大生命 +5%',
-                nextLevel: 0,
-                bonus: { hpPercent: 5 }
-            },
-            {
-                id: 'basic:fallback-crit',
-                kind: 'basic',
-                sourceId: 'fallback:crit',
-                name: '即时精准',
-                description: '本局暴击 +1%',
-                nextLevel: 0,
-                bonus: { crit: 1 }
-            },
-            {
-                id: 'basic:fallback-defense',
-                kind: 'basic',
-                sourceId: 'fallback:defense',
-                name: '即时坚守',
-                description: '本局防御 +2',
-                nextLevel: 0,
-                bonus: { def: 2 }
-            }
-        ];
-        for (const fallback of fallbackCards) {
-            if (cards.length >= BATTLE_BALANCE.bondChoiceCount) {
-                break;
-            }
-            cards.push(fallback);
-        }
-        return cards;
+    private toBondUpgradeCard(choice: BondGrowthChoice): UpgradeCard {
+        return {
+            id: `bond:${choice.id}`,
+            kind: 'bond',
+            sourceId: choice.id,
+            name: `${choice.bondName}·${choice.name}`,
+            description: choice.description,
+            nextLevel: choice.nextRank,
+            bonus: {},
+            rarity: choice.rarity,
+            progress: choice.progress,
+            weight: choice.weight
+        };
     }
 
 
-    private toUpgradeCard(
-        choice: CardChoice,
-        kind: UpgradeCardKind
-    ): UpgradeCard {
-        return {
-            id: `${kind}:${choice.id}`,
-            kind,
-            sourceId: choice.id,
-            name: choice.name,
-            description: choice.description,
-            nextLevel: 0,
-            bonus: {}
-        };
+    private openBondDraw(): void {
+        if (this.upgradeChoicesVisible || this.battleComplete) {
+            this.battleUI.addLog('当前有选择界面，请先完成或关闭');
+            return;
+        }
+        const result = this.bondGrowthSystem.drawChoices();
+        this.battleUI.addLog(result.message);
+        if (!result.success) {
+            this.updateRunUI();
+            return;
+        }
+        this.showBondChoices(result.choices);
+    }
+
+
+    private showBondChoices(choices: BondGrowthChoice[]): void {
+        this.upgradeChoicesVisible = true;
+        this.battleUI.showUpgradeCards(
+            choices.map((choice) => this.toBondUpgradeCard(choice)),
+            0,
+            (choice) => this.onBondSelected(choice),
+            () => {
+                this.upgradeChoicesVisible = false;
+                this.battleUI.hideUpgradeUI();
+                this.updateRunUI();
+            },
+            1,
+            () => this.refreshBondChoices(),
+            {
+                title: '羁绊抽卡 · 三选一',
+                statusText: `灵石 ${this.bondGrowthSystem.getSpiritStones()}`,
+                refreshText: `刷新 ${this.bondGrowthSystem.getRefreshCost()}灵石`
+            }
+        );
+        this.updateRunUI();
+    }
+
+
+    private refreshBondChoices(): void {
+        const result = this.bondGrowthSystem.refreshChoices();
+        this.battleUI.addLog(result.message);
+        if (result.success) {
+            this.showBondChoices(result.choices);
+        } else {
+            this.updateRunUI();
+        }
+    }
+
+
+    private onBondSelected(choice: UpgradeCard): void {
+        this.upgradeChoicesVisible = false;
+        const previousAttackInterval = this.runData.attackInterval;
+        const previousMaxHp = this.runData.maxHp;
+        const result = this.bondGrowthSystem.selectCard(choice.sourceId);
+        if (result.success && result.bonus) {
+            this.runData.applyBonus(result.bonus);
+            this.currentPlayerHp += Math.max(
+                0,
+                this.runData.maxHp - previousMaxHp
+            );
+        }
+        this.battleUI.addLog(result.message);
+        if (
+            result.success &&
+            this.runData.attackInterval !== previousAttackInterval
+        ) {
+            this.refreshPlayerAttackTimer();
+        }
+        this.updateBuildUI();
+        this.updateRunUI();
+        this.showPendingUpgradeChoices();
     }
 
 
@@ -981,6 +996,7 @@ export class BattleSystem extends Component {
 
     private startTask(taskId: number, announce = true): void {
         const task = getFirstStageTask(taskId);
+        this.bondGrowthSystem.setTaskStage(task.id);
         this.currentWave = task.id;
         this.taskKillCount = 0;
         this.taskEliteKillCount = 0;
@@ -1044,7 +1060,10 @@ export class BattleSystem extends Component {
         );
         this.nextEnemyIndex += spawnCount;
         for (const enemy of spawned) {
-            enemy.expReward *= task.normalExpMultiplier;
+            enemy.expReward = Math.max(
+                1,
+                Math.round(enemy.expReward * task.normalExpMultiplier)
+            );
         }
         this.prepareSpawnedEnemies(spawned);
         this.enemies.push(...spawned);
@@ -1067,7 +1086,10 @@ export class BattleSystem extends Component {
                 DEFAULT_MONSTER_GROWTH_CONTEXT,
                 900 + this.nextEliteThresholdIndex
             );
-            elite.expReward *= task.normalExpMultiplier;
+            elite.expReward = Math.max(
+                1,
+                Math.round(elite.expReward * task.normalExpMultiplier)
+            );
             this.prepareSpawnedEnemies([elite]);
             this.enemies.push(elite);
             this.nextEliteThresholdIndex++;
@@ -1172,14 +1194,15 @@ export class BattleSystem extends Component {
     private grantTaskReward(task: BattleTaskConfig): void {
         const previousMaxHp = this.runData.maxHp;
         this.upgradeManager.addExp(task.taskExpReward);
-        this.upgradeManager.addPendingChoices(1);
+        const spiritReward = this.bondGrowthSystem.grantTaskReward(task.id);
         this.currentPlayerHp += Math.max(
             0,
             this.runData.maxHp - previousMaxHp
         );
         this.totalExpReward += task.taskExpReward;
         this.battleUI.addLog(
-            `完成 1-${task.id}，获得 ${task.taskExpReward} EXP 和 1 次羁绊选择！`
+            `完成 1-${task.id}，获得 ${task.taskExpReward} EXP` +
+            ` 和 ${spiritReward.amount} 灵石！`
         );
         this.updateRunUI();
     }
@@ -1378,9 +1401,7 @@ export class BattleSystem extends Component {
 
 
     private getMultiTargetCount(): number {
-        const skillLevel =
-            this.buildRuntime.skillLevels[NORMAL_ATTACK_SKILL_ID] ?? 1;
-        const config = getNormalAttackRuntimeConfig(skillLevel);
+        const config = this.getNormalAttackConfig();
         const awakeningReady = config.awakeningAttackInterval > 0 &&
             this.awakeningCounter >= config.awakeningAttackInterval;
         return awakeningReady
@@ -1389,17 +1410,12 @@ export class BattleSystem extends Component {
     }
 
 
-    private applyInitialBuildEffects(): void {
-        for (const skillId of this.buildRuntime.selectedSkillIds) {
-            const definition = getSkillDefinition(skillId);
-            const level = this.buildRuntime.skillLevels[skillId] ?? 1;
-            const unlockedEffects = definition?.levelEffects.filter((effect) => {
-                return effect.level <= level;
-            }) ?? [];
-            for (const effect of unlockedEffects) {
-                this.runData.applyBonus(effect.effect);
-            }
-        }
+    private getNormalAttackConfig(): ReturnType<
+        typeof getBattleNormalAttackRuntimeConfig
+    > {
+        return getBattleNormalAttackRuntimeConfig(
+            this.buildRuntime.skillUpgradeLevels[NORMAL_ATTACK_SKILL_ID] ?? {}
+        );
     }
 
 
@@ -1407,24 +1423,27 @@ export class BattleSystem extends Component {
         const skillSlots = this.buildRuntime.selectedSkillIds.map(
             (skillId, index) => {
                 const definition = getSkillDefinition(skillId);
-                const level = this.buildRuntime.skillLevels[skillId] ?? 1;
-                return `${index + 1} ${definition?.skillName ?? skillId} Lv.${level}`;
+                const metaLevel = this.buildRuntime.skillMetaLevels[skillId] ?? 1;
+                const ranks = this.buildRuntime.skillUpgradeLevels[skillId] ?? {};
+                const coreNames = BATTLE_SKILL_UPGRADES
+                    .filter((node) => {
+                        return node.skillId === skillId &&
+                            node.rarity !== 'basic' &&
+                            (ranks[node.id] ?? 0) > 0;
+                    })
+                    .map((node) => node.name);
+                return `${index + 1} ${definition?.skillName ?? skillId}` +
+                    ` 元Lv${metaLevel} · 节点${Object.keys(ranks).length}` +
+                    (coreNames.length > 0 ? ` · ${coreNames.join('/')}` : '');
             }
         );
         this.battleUI.updateSkillSlots(skillSlots);
 
         this.battleUI.updateBondSlots(
-            this.battleCardSystem.getSlotDescriptions()
+            this.bondGrowthSystem.getCardDescriptions()
         );
-        const bondProgress = this.buildRuntime.selectedBondIds.map((bondId) => {
-            const definition = getBondDefinition(bondId);
-            return definition?.bondName ?? bondId;
-        });
         this.battleUI.updateFactionProgress(
-            bondProgress.length > 0
-                ? `${bondProgress.join(' · ')} · ` +
-                    this.battleCardSystem.getProgressText()
-                : '本局未携带羁绊'
+            this.bondGrowthSystem.getProgressText()
         );
     }
 
@@ -1449,6 +1468,102 @@ export class BattleSystem extends Component {
             this.currentPlayerHp,
             this.runData.maxHp
         );
+        this.battleUI.updateGrowthResources(
+            this.bondGrowthSystem.getSpiritStones(),
+            this.bondGrowthSystem.getDrawCost(),
+            this.bondGrowthSystem.getCombo()
+        );
+    }
+
+
+    private bindBattleUIActions(): void {
+        this.battleUI.setBondDrawHandler(() => this.openBondDraw());
+        this.battleUI.setDebugActions({
+            addExp: () => {
+                this.upgradeManager.addExp(100);
+                this.afterDebugStateChange('调试：增加100经验');
+            },
+            forceLevelUp: () => {
+                const needed = Math.max(
+                    1,
+                    this.runData.expToNextLevel - this.runData.exp
+                );
+                this.upgradeManager.addExp(needed);
+                this.afterDebugStateChange('调试：强制角色升级');
+            },
+            addSpiritStones: () => {
+                this.bondGrowthSystem.addSpiritStones(1000);
+                this.afterDebugStateChange('调试：增加1000灵石');
+            },
+            forceSkillChoice: () => {
+                this.upgradeManager.addPendingChoices(1);
+                this.afterDebugStateChange('调试：增加1次技能选择');
+            },
+            forceBondDraw: () => {
+                const missing = Math.max(
+                    0,
+                    this.bondGrowthSystem.getDrawCost() -
+                        this.bondGrowthSystem.getSpiritStones()
+                );
+                this.bondGrowthSystem.addSpiritStones(missing);
+                this.openBondDraw();
+            },
+            cycleMetaLevel: () => this.cycleDebugMetaLevel(),
+            inspectSkillNodes: () => {
+                const ranks = this.buildRuntime.skillUpgradeLevels[
+                    NORMAL_ATTACK_SKILL_ID
+                ] ?? {};
+                const names = Object.keys(ranks).map((id) => {
+                    return BATTLE_SKILL_UPGRADES.find((node) => {
+                        return node.id === id;
+                    })?.name ?? id;
+                });
+                this.battleUI.addLog(
+                    `技能节点：${names.length > 0 ? names.join('、') : '无'}`
+                );
+            },
+            inspectBondCards: () => {
+                const cards = this.bondGrowthSystem.getCardDescriptions();
+                this.battleUI.addLog(
+                    `羁绊卡：${cards.length > 0 ? cards.join('、') : '无'}`
+                );
+            },
+            inspectWeights: () => {
+                this.battleUI.addLog(
+                    `技能权重：${this.upgradeCardGenerator.getDebugWeightText()}`
+                );
+                this.battleUI.addLog(
+                    `羁绊权重：${this.bondGrowthSystem.getDebugWeightText()}`
+                );
+            },
+            resetBuild: () => this.restartStage()
+        });
+    }
+
+
+    private cycleDebugMetaLevel(): void {
+        const levels = [1, 3, 6, 9, 10];
+        const current = this.buildRuntime.skillMetaLevels[
+            NORMAL_ATTACK_SKILL_ID
+        ] ?? 1;
+        const index = levels.indexOf(current);
+        const next = levels[(index + 1) % levels.length];
+        const state = getOrCreatePlayerSkillState(
+            gamePlayerData,
+            NORMAL_ATTACK_SKILL_ID
+        );
+        state.level = next;
+        saveSkillProgress(gamePlayerData);
+        this.buildRuntime.skillMetaLevels[NORMAL_ATTACK_SKILL_ID] = next;
+        this.afterDebugStateChange(`调试：局外普攻设为 Lv${next}`);
+    }
+
+
+    private afterDebugStateChange(message: string): void {
+        this.battleUI.addLog(message);
+        this.updateRunUI();
+        this.updateBuildUI();
+        this.showPendingUpgradeChoices();
     }
 
 

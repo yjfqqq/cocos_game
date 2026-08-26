@@ -5,7 +5,11 @@ import {
     BATTLE_RUN_LEVEL_POLICY,
     PlayerLevelSystem
 } from './PlayerLevelSystem';
-import { SKILL_DEFINITIONS } from '../GameData/SkillData';
+import {
+    canOfferBattleSkillNode,
+    getBattleSkillUpgradeDefinition,
+    SKILL_DEFINITIONS
+} from '../GameData/SkillData';
 import type { UpgradeCard } from './UpgradeCardGenerator';
 import { BATTLE_BALANCE } from '../BattleBalance';
 
@@ -23,7 +27,8 @@ export interface UpgradeSelectResult {
 }
 
 
-// 负责局内经验、角色等级和待选择次数。它不控制 BattleSystem 的暂停状态。
+// 负责局内经验、基础属性成长和技能节点选择次数。
+// 羁绊资源与抽卡由 BondGrowthSystem 独立处理。
 export class UpgradeManager {
 
     private readonly playerLevelSystem: PlayerLevelSystem;
@@ -43,7 +48,8 @@ export class UpgradeManager {
     addExp(amount: number): UpgradeExpResult {
         const result = this.playerLevelSystem.addExp(amount);
         this.runtime.pendingLevelUps += result.reachedLevels.filter((level) => {
-            return level % BATTLE_BALANCE.bondChoiceLevelInterval === 0;
+            return (BATTLE_BALANCE.skillChoiceLevels as readonly number[])
+                .indexOf(level) >= 0;
         }).length;
         return {
             ...result,
@@ -71,7 +77,7 @@ export class UpgradeManager {
         if (card.kind !== 'skill') {
             return {
                 success: false,
-                message: '羁绊卡和基础卡应由卡牌系统处理'
+                message: '该入口只处理技能节点'
             };
         }
 
@@ -103,29 +109,43 @@ export class UpgradeManager {
             return { success: false, message: '该技能未在战前携带' };
         }
 
-        const definition = SKILL_DEFINITIONS.find((skill) => {
+        const skillDefinition = SKILL_DEFINITIONS.find((skill) => {
             return skill.skillId === card.sourceId;
         });
-        const currentLevel = this.runtime.skillLevels[card.sourceId] ?? 0;
+        const upgradeDefinition = card.upgradeId
+            ? getBattleSkillUpgradeDefinition(card.upgradeId)
+            : undefined;
+        const levels = this.runtime.skillUpgradeLevels[card.sourceId] ?? {};
+        const currentLevel = upgradeDefinition
+            ? levels[upgradeDefinition.id] ?? 0
+            : 0;
         const nextLevel = currentLevel + 1;
-        const levelEffect = definition?.levelEffects.find((effect) => {
-            return effect.level === nextLevel;
-        });
 
         if (
-            !definition ||
-            currentLevel >= definition.maxLevel ||
+            !skillDefinition ||
+            !upgradeDefinition ||
+            currentLevel >= upgradeDefinition.maxRank ||
             card.nextLevel !== nextLevel ||
-            !levelEffect
+            !canOfferBattleSkillNode(
+                upgradeDefinition,
+                card.sourceId,
+                this.runtime.skillMetaLevels[card.sourceId] ?? 1,
+                levels
+            )
         ) {
             return { success: false, message: '该技能升级已失效' };
         }
 
-        this.runtime.skillLevels[card.sourceId] = nextLevel;
+        levels[upgradeDefinition.id] = nextLevel;
+        this.runtime.skillUpgradeLevels[card.sourceId] = levels;
+        this.runtime.skillLevels[card.sourceId] = 1 + Object.keys(levels)
+            .reduce((total, upgradeId) => total + levels[upgradeId], 0);
         return {
             success: true,
-            message: `${definition.skillName}提升至 Lv.${nextLevel}`,
-            bonus: { ...levelEffect.effect }
+            message: `获得本局技能强化【${skillDefinition.skillName}·` +
+                `${upgradeDefinition.name}` +
+                `${upgradeDefinition.maxRank > 1 ? ` ${nextLevel}` : ''}】`,
+            bonus: { ...upgradeDefinition.bonus }
         };
     }
 }

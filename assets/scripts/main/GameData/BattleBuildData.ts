@@ -15,6 +15,8 @@ export interface BattleBuildSelection {
 
 export interface BattleBuildRuntime extends BattleBuildSelection {
     skillLevels: Record<string, number>;
+    skillMetaLevels: Record<string, number>;
+    skillUpgradeLevels: Record<string, Record<string, number>>;
     bondLevels: Record<string, number>;
     pendingLevelUps: number;
 }
@@ -71,10 +73,14 @@ export function createBattleBuildRuntime(
 ): BattleBuildRuntime {
     const normalized = normalizeBattleBuildSelection(selection);
     const skillLevels: Record<string, number> = {};
+    const skillMetaLevels: Record<string, number> = {};
+    const skillUpgradeLevels: Record<string, Record<string, number>> = {};
     const bondLevels: Record<string, number> = {};
 
     for (const skillId of normalized.selectedSkillIds) {
         skillLevels[skillId] = 1;
+        skillMetaLevels[skillId] = 1;
+        skillUpgradeLevels[skillId] = {};
     }
     for (const bondId of normalized.selectedBondIds) {
         bondLevels[bondId] = 0;
@@ -83,6 +89,8 @@ export function createBattleBuildRuntime(
     return {
         ...normalized,
         skillLevels,
+        skillMetaLevels,
+        skillUpgradeLevels,
         bondLevels,
         pendingLevelUps: 0
     };

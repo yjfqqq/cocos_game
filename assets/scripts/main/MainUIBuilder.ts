@@ -58,8 +58,13 @@ import {
 } from './GameData/SkillData';
 import { SkillSystem } from './Systems/SkillSystem';
 import {
+    loadSkillProgress,
+    saveSkillProgress
+} from './Systems/PlayerProgressStorage';
+import {
     getBondDefinition
 } from './GameData/BondData';
+import { RUNTIME_BOND_DEFINITIONS } from './GameData/BondGrowthData';
 
 const { ccclass } = _decorator;
 
@@ -91,6 +96,8 @@ export class MainUIBuilder extends Component {
     };
 
     start() {
+
+        loadSkillProgress(gamePlayerData);
 
         // =====================================================
         // 手机 Web 预览横屏与分辨率适配
@@ -844,7 +851,7 @@ export class MainUIBuilder extends Component {
         this.createLabel(
             root,
             'Subtitle',
-            '战斗中只会强化本次携带的技能与羁绊',
+            '技能按局外等级解锁候选；羁绊通过局内灵石主动抽取',
             0,
             248,
             20,
@@ -919,20 +926,18 @@ export class MainUIBuilder extends Component {
         this.createLabel(
             bondPanel,
             'Title',
-            `羁绊  ${selection.selectedBondIds.length} / ` +
-                `${BATTLE_BUILD_LIMITS.maxEquippedBonds}`,
+            `V1羁绊卡池  ${RUNTIME_BOND_DEFINITIONS.length}套`,
             0,
             155,
             29,
             new Color(216, 170, 235)
         );
 
-        for (let index = 0; index < selection.selectedBondIds.length; index++) {
-            const bondId = selection.selectedBondIds[index];
-            const definition = getBondDefinition(bondId);
+        for (let index = 0; index < RUNTIME_BOND_DEFINITIONS.length; index++) {
+            const definition = RUNTIME_BOND_DEFINITIONS[index];
             const row = this.createPanel(
                 bondPanel,
-                `SelectedBond_${bondId}`,
+                `RuntimeBond_${definition.id}`,
                 470,
                 112,
                 0,
@@ -942,7 +947,7 @@ export class MainUIBuilder extends Component {
             this.createLabel(
                 row,
                 'Name',
-                `✓ ${definition?.bondName ?? bondId}`,
+                `◇ ${definition.name}`,
                 -85,
                 25,
                 23,
@@ -951,7 +956,7 @@ export class MainUIBuilder extends Component {
             this.createLabel(
                 row,
                 'Description',
-                definition?.description ?? '强化本局整体 Build',
+                definition.description,
                 -85,
                 -8,
                 17,
@@ -960,7 +965,7 @@ export class MainUIBuilder extends Component {
             this.createLabel(
                 row,
                 'InitialLevel',
-                '进入战斗后通过绿 → 蓝 → 紫卡牌吞噬成长',
+                '进入战斗后消耗灵石三选一，角色升级不会自动抽取',
                 -85,
                 -35,
                 16,
@@ -1769,6 +1774,7 @@ export class MainUIBuilder extends Component {
                 NORMAL_ATTACK_SKILL_ID,
                 fragmentCount
             );
+            saveSkillProgress(gamePlayerData);
             this.shopMessage = result.message;
             this.build('商店');
         });
@@ -1801,6 +1807,7 @@ export class MainUIBuilder extends Component {
                 const result = this.skillSystem.upgradeWithFragments(
                     NORMAL_ATTACK_SKILL_ID
                 );
+                saveSkillProgress(gamePlayerData);
                 this.shopMessage = result.message;
                 this.build('商店');
             });
