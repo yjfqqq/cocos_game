@@ -85,7 +85,8 @@ export class MainUIBuilder extends Component {
 
     private readonly artFrames: Map<string, SpriteFrame> = new Map();
     private readonly artPaths: Record<string, string> = {
-        background: 'ui/main/main-bg-v1/texture',
+        // 背景图暂时停用，避免进入微信小游戏主包。
+        // background: 'ui/main/main-bg-v1/texture',
         '主页': 'ui/main/icon-home-v1/texture',
         '角色': 'ui/main/icon-role-v1/texture',
         '神器': 'ui/main/icon-artifact-v1/texture',
@@ -179,16 +180,16 @@ export class MainUIBuilder extends Component {
 
         main.setPosition(0, 0, 0);
 
-        // 背景图始终位于所有界面节点下方。
-        this.createSprite(
-            main,
-            'MainBackground',
-            'background',
-            1280,
-            720,
-            0,
-            0
-        );
+        // 背景图暂时停用；恢复资源后可取消以下代码的注释。
+        // this.createSprite(
+        //     main,
+        //     'MainBackground',
+        //     'background',
+        //     1280,
+        //     720,
+        //     0,
+        //     0
+        // );
 
         // 轻微冷色遮罩保证文字在明亮云海上仍有足够对比度。
         this.createPanel(
