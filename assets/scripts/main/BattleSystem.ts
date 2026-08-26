@@ -7,16 +7,13 @@ import type { EnemyViewData } from './BattleUI';
 import { gamePlayerData } from './GameData/PlayerData';
 import {
     BATTLE_PACING,
-    getBattleWaveCount,
-    getNormalPackSize,
-    getNormalPackStartIndex
+    getBattleWaveCount
 } from './GameData/BattlePacingData';
 import {
-    BattlePacingSystem
-} from './Systems/BattlePacingSystem';
-import type {
-    BattlePacingEvent
-} from './Systems/BattlePacingSystem';
+    FIRST_STAGE_TASKS,
+    getFirstStageTask
+} from './GameData/BattleTaskData';
+import type { BattleTaskConfig } from './GameData/BattleTaskData';
 import { EquipmentSystem } from './Systems/EquipmentSystem';
 import {
     DEFAULT_BATTLE_BUILD,
@@ -28,17 +25,19 @@ import type {
     BattleBuildSelection
 } from './GameData/BattleBuildData';
 import {
-    getSkillDefinition
+    getNormalAttackRuntimeConfig,
+    getSkillDefinition,
+    NORMAL_ATTACK_SKILL_ID
 } from './GameData/SkillData';
 import {
     getBondDefinition
 } from './GameData/BondData';
 import { UpgradeManager } from './Systems/UpgradeManager';
-import { UpgradeCardGenerator } from './Systems/UpgradeCardGenerator';
 import type {
     UpgradeCard,
     UpgradeCardKind
 } from './Systems/UpgradeCardGenerator';
+import { UpgradeCardGenerator } from './Systems/UpgradeCardGenerator';
 import { CardSystem } from './Systems/CardSystem';
 import type { CardChoice } from './Systems/CardSystem';
 import { BondSystem } from './Systems/FactionSystem';
@@ -117,7 +116,8 @@ export function createNormalEnemyPack(
 
 export function createEliteEnemy(
     wave: number,
-    growthContext: MonsterGrowthContext = DEFAULT_MONSTER_GROWTH_CONTEXT
+    growthContext: MonsterGrowthContext = DEFAULT_MONSTER_GROWTH_CONTEXT,
+    index = 900
 ): MonsterData {
     const baseHp = getNormalBaseHp(wave);
     const baseAtk = getNormalBaseAttack('melee', wave);
@@ -128,7 +128,7 @@ export function createEliteEnemy(
     );
 
     return createScaledMonster({
-        id: wave * 1000 + 900,
+        id: wave * 1000 + index,
         name: '精英妖将',
         type: 'melee',
         isBoss: false,
@@ -153,22 +153,26 @@ export function createEliteEnemy(
 export function createBossEnemy(
     wave: number,
     index = 999,
-    growthContext: MonsterGrowthContext = DEFAULT_MONSTER_GROWTH_CONTEXT
+    growthContext: MonsterGrowthContext = DEFAULT_MONSTER_GROWTH_CONTEXT,
+    hpMultiplier = 1,
+    attackMultiplier = 1,
+    expReward: number = BATTLE_BALANCE.bossExp,
+    name = '镇关妖王'
 ): MonsterData {
-    const baseMaxHp = BATTLE_BALANCE.bossBaseHp +
-        wave * BATTLE_BALANCE.bossHpPerWave;
+    const baseMaxHp = Math.round((BATTLE_BALANCE.bossBaseHp +
+        wave * BATTLE_BALANCE.bossHpPerWave) * hpMultiplier);
     const baseDef = Math.round(
         BATTLE_BALANCE.bossBaseDefense +
         wave * BATTLE_BALANCE.bossDefensePerWave
     );
-    const baseAtk = Math.round(
+    const baseAtk = Math.round((
         BATTLE_BALANCE.bossBaseAttack +
         wave * BATTLE_BALANCE.bossAttackPerWave
-    );
+    ) * attackMultiplier);
 
     return createScaledMonster({
         id: wave * 1000 + index,
-        name: '镇关妖王',
+        name,
         type: 'melee',
         isBoss: true,
         isElite: false,
@@ -179,7 +183,7 @@ export function createBossEnemy(
         hp: baseMaxHp,
         def: baseDef,
         atk: baseAtk,
-        expReward: BATTLE_BALANCE.bossExp,
+        expReward,
         goldReward: BATTLE_BALANCE.bossGold,
         skillExpReward: BATTLE_PACING.bossSkillExpReward,
         baseMaxHp,
@@ -304,24 +308,10 @@ export function applyMonsterGrowth(
         ? monster.hp / previousMaxHp
         : 1;
     const scale = getMonsterGrowthScale(monster.wave, growthContext);
-    const archetypeHitsMultiplier = monster.isBoss
-        ? BATTLE_BALANCE.bossHitsMultiplier
-        : monster.isElite
-            ? BATTLE_BALANCE.eliteHitsMultiplier
-            : monster.isEnhanced
-                ? BATTLE_BALANCE.enhancedHitsMultiplier
-                : 1;
-    const minimumCombatHp = Math.round(
-        scale.expectedPlayerHit *
-        scale.targetHitsToDefeat *
-        archetypeHitsMultiplier
-    );
-
     monster.level = scale.level;
     monster.maxHp = Math.max(
         1,
-        Math.round(monster.baseMaxHp * scale.hpMultiplier),
-        minimumCombatHp
+        Math.round(monster.baseMaxHp * scale.hpMultiplier)
     );
     monster.atk = Math.max(
         1,
@@ -346,19 +336,26 @@ export class BattleSystem extends Component {
     private battleCardSystem!: CardSystem;
     private bondSystem!: BondSystem;
     private equipmentSystem!: EquipmentSystem;
-    private battlePacingSystem!: BattlePacingSystem;
     private enemies: MonsterData[] = [];
 
     private currentPlayerHp = 0;
     private currentWave = 1;
-    private readonly totalWaves = getBattleWaveCount();
+    private readonly totalWaves = FIRST_STAGE_TASKS.length;
     private totalExpReward = 0;
     private totalGoldReward = 0;
     private attackCursor = 0;
-    private timelineComplete = false;
-    private challengeRound = 1;
+    private battleComplete = false;
     private nextSpawnLane = 0;
     private upgradeChoicesVisible = false;
+    private taskKillCount = 0;
+    private taskEliteKillCount = 0;
+    private nextEnemyIndex = 0;
+    private nextEliteThresholdIndex = 0;
+    private finalBossPhase = false;
+    private taskBossId: number | null = null;
+    private freeRefreshesRemaining = BATTLE_BALANCE.freeRefreshesPerRun;
+    private normalAttackCounter = 0;
+    private awakeningCounter = 0;
 
     private isPaused = false;
     private onExit: () => void = () => {};
@@ -374,6 +371,15 @@ export class BattleSystem extends Component {
         this.onExit = onExit;
         this.buildSelection = normalizeBattleBuildSelection(selection);
         this.buildRuntime = createBattleBuildRuntime(this.buildSelection);
+        for (const skillId of this.buildRuntime.selectedSkillIds) {
+            const persistentSkill = gamePlayerData.skills.find((skill) => {
+                return skill.skillId === skillId;
+            });
+            this.buildRuntime.skillLevels[skillId] = Math.max(
+                1,
+                persistentSkill?.level ?? 1
+            );
+        }
         this.equipmentSystem = new EquipmentSystem(gamePlayerData.equipment);
         this.runData = new BattleRunData(
             this.equipmentSystem.calculateAttributes(gamePlayerData.attributes)
@@ -390,21 +396,21 @@ export class BattleSystem extends Component {
             this.buildRuntime.selectedBondIds[0]
         );
         this.battleCardSystem = new CardSystem(this.bondSystem);
-        this.battlePacingSystem = new BattlePacingSystem();
-
         this.currentWave = 1;
         this.totalExpReward = 0;
         this.totalGoldReward = 0;
         this.attackCursor = 0;
-        this.timelineComplete = false;
-        this.challengeRound = 1;
+        this.battleComplete = false;
         this.nextSpawnLane = 0;
         this.upgradeChoicesVisible = false;
+        this.freeRefreshesRemaining = BATTLE_BALANCE.freeRefreshesPerRun;
+        this.normalAttackCounter = 0;
+        this.awakeningCounter = 0;
         this.currentPlayerHp = this.runData.maxHp;
         this.isPaused = false;
         this.enemies = [];
         this.battleUI.hideUpgradeUI();
-        this.handlePacingEvents(this.battlePacingSystem.start(), false);
+        this.startTask(1, false);
 
         this.updateRunUI();
         this.renderCurrentWave();
@@ -415,7 +421,7 @@ export class BattleSystem extends Component {
     begin(): void {
         this.updateBattleStatus();
         this.battleUI.addLog(
-            `五分钟试炼开始，第1批${this.enemies.length}只敌人进入战场！`
+            `第一关开始：完成五个主线任务并击败最终首领！`
         );
         this.startCombatTimers();
     }
@@ -425,7 +431,7 @@ export class BattleSystem extends Component {
         this.unschedule(this.playerAttack);
         this.unschedule(this.enemyGroupAttack);
         this.unschedule(this.regeneratePlayer);
-        this.unschedule(this.updateBattleTimeline);
+        this.unschedule(this.updateTaskSpawner);
         this.unschedule(this.updateEnemyMovement);
         this.unscheduleAllCallbacks();
     }
@@ -436,7 +442,7 @@ export class BattleSystem extends Component {
         this.unschedule(this.playerAttack);
         this.unschedule(this.enemyGroupAttack);
         this.unschedule(this.regeneratePlayer);
-        this.unschedule(this.updateBattleTimeline);
+        this.unschedule(this.updateTaskSpawner);
         this.unschedule(this.updateEnemyMovement);
 
         this.schedule(this.playerAttack, this.runData.attackInterval);
@@ -446,21 +452,19 @@ export class BattleSystem extends Component {
             this.updateEnemyMovement,
             BATTLE_BALANCE.monsterMovementTick
         );
-        if (!this.timelineComplete) {
-            this.schedule(this.updateBattleTimeline, 1);
+        if (!this.battleComplete) {
+            this.schedule(this.updateTaskSpawner, 0.5);
         }
     }
 
 
-    private updateBattleTimeline = (): void => {
-        if (this.isPaused || this.timelineComplete) {
+    private updateTaskSpawner = (): void => {
+        if (this.isPaused || this.battleComplete) {
             return;
         }
-
-        this.handlePacingEvents(this.battlePacingSystem.advance(1), true);
-        if (!this.isPaused) {
-            this.updateBattleStatus();
-        }
+        this.spawnForCurrentTask();
+        this.updateBattleStatus();
+        this.showPendingUpgradeChoices();
     };
 
 
@@ -482,44 +486,163 @@ export class BattleSystem extends Component {
         if (living.length === 0) {
             return;
         }
-
-        // 主角每次只攻击最靠近的 1 只怪物。
-        const targetCount = Math.min(
-            living.length,
-            this.getMultiTargetCount()
+        const attackTaskId = this.currentWave;
+        const normalAttackLevel =
+            this.buildRuntime.skillLevels[NORMAL_ATTACK_SKILL_ID] ?? 1;
+        const config = getNormalAttackRuntimeConfig(normalAttackLevel);
+        const awakeningReady = config.awakeningAttackInterval > 0 &&
+            this.awakeningCounter >= config.awakeningAttackInterval;
+        const targetCount = awakeningReady
+            ? Math.max(1, config.awakeningMaxTargets)
+            : 1 + config.scatterExtraTargets;
+        const primaryTargets = living.slice(0, targetCount);
+        const unavailableForPenetration = new Set(
+            primaryTargets.map((target) => target.id)
         );
-        const targets = living.slice(0, targetCount);
-
+        const attackedIds: number[] = [];
         let defeatedCount = 0;
 
-        for (const target of targets) {
-            const base = Math.max(1, this.runData.atk - target.def);
-            const isCritical = Math.random() * 100 < this.runData.crit;
-            const damage = Math.max(
-                1,
-                Math.round(
-                    base *
-                    (isCritical ? this.runData.critDamageMultiplier : 1) *
-                    (0.9 + Math.random() * 0.2)
-                )
+        for (let index = 0; index < primaryTargets.length; index++) {
+            if (this.battleComplete || this.currentWave !== attackTaskId) {
+                break;
+            }
+            const multiplier = awakeningReady
+                ? config.awakeningDamageMultiplier
+                : index === 0
+                    ? 1
+                    : config.scatterDamageMultiplier;
+            defeatedCount += this.executeNormalAttackProjectile(
+                primaryTargets[index],
+                multiplier,
+                living,
+                unavailableForPenetration,
+                attackedIds,
+                config,
+                attackTaskId
             );
+        }
 
-            target.hp = Math.max(0, target.hp - damage);
-            this.battleUI.updateEnemyHp(target.id, target.hp, target.maxHp);
-            this.battleUI.showEnemyDamage(target.id, damage, isCritical);
+        if (awakeningReady) {
+            this.awakeningCounter = 0;
+            this.battleUI.addLog('Lv10【火力全开】发动！');
+        } else if (!this.battleComplete && this.currentWave === attackTaskId) {
+            this.normalAttackCounter++;
+            this.awakeningCounter++;
 
-            if (target.hp <= 0) {
-                defeatedCount++;
-                this.resolveEnemyDefeat(target);
+            if (
+                config.comboAttackInterval > 0 &&
+                this.normalAttackCounter >= config.comboAttackInterval
+            ) {
+                this.normalAttackCounter = 0;
+                const comboCandidates = this.getVisibleLivingEnemies();
+                const comboTarget = comboCandidates[0];
+                if (comboTarget) {
+                    const comboUnavailable = new Set<number>([comboTarget.id]);
+                    defeatedCount += this.executeNormalAttackProjectile(
+                        comboTarget,
+                        config.comboDamageMultiplier,
+                        comboCandidates,
+                        comboUnavailable,
+                        attackedIds,
+                        config,
+                        attackTaskId
+                    );
+                    this.battleUI.addLog('Lv5【连击】追加攻击！');
+                }
             }
         }
 
-        this.battleUI.playPlayerAttack(targets.map((target) => target.id));
+        this.battleUI.playPlayerAttack(
+            attackedIds.filter((id, index, ids) => ids.indexOf(id) === index)
+        );
 
         if (defeatedCount > 0) {
             this.afterEnemyDefeats();
         }
     };
+
+
+    private getVisibleLivingEnemies(): MonsterData[] {
+        return this.getLivingEnemies()
+            .filter((enemy) => {
+                return (enemy.positionX ?? BATTLE_BALANCE.monsterSpawnX) <=
+                    BATTLE_BALANCE.monsterVisibleRightX;
+            })
+            .sort((a, b) => {
+                return (a.positionX ?? BATTLE_BALANCE.monsterSpawnX) -
+                    (b.positionX ?? BATTLE_BALANCE.monsterSpawnX);
+            });
+    }
+
+
+    private executeNormalAttackProjectile(
+        target: MonsterData,
+        damageMultiplier: number,
+        candidates: MonsterData[],
+        unavailable: Set<number>,
+        attackedIds: number[],
+        config: ReturnType<typeof getNormalAttackRuntimeConfig>,
+        taskId: number
+    ): number {
+        let defeatedCount = this.dealNormalAttackDamage(
+            target,
+            damageMultiplier,
+            config.damageMultiplier,
+            attackedIds
+        );
+
+        for (let index = 0; index < config.penetrationTargets; index++) {
+            if (this.battleComplete || this.currentWave !== taskId) {
+                break;
+            }
+            const penetrationTarget = candidates.find((candidate) => {
+                return candidate.hp > 0 && !unavailable.has(candidate.id);
+            });
+            if (!penetrationTarget) {
+                break;
+            }
+            unavailable.add(penetrationTarget.id);
+            defeatedCount += this.dealNormalAttackDamage(
+                penetrationTarget,
+                damageMultiplier * config.penetrationDamageMultiplier,
+                config.damageMultiplier,
+                attackedIds
+            );
+        }
+        return defeatedCount;
+    }
+
+
+    private dealNormalAttackDamage(
+        target: MonsterData,
+        sourceMultiplier: number,
+        permanentSkillMultiplier: number,
+        attackedIds: number[]
+    ): number {
+        const base = Math.max(1, this.runData.atk - target.def);
+        const isCritical = Math.random() * 100 < this.runData.crit;
+        const damage = Math.max(
+            1,
+            Math.round(
+                base *
+                sourceMultiplier *
+                permanentSkillMultiplier *
+                this.runData.skillDamageMultiplier *
+                (isCritical ? this.runData.critDamageMultiplier : 1) *
+                (0.9 + Math.random() * 0.2)
+            )
+        );
+
+        target.hp = Math.max(0, target.hp - damage);
+        attackedIds.push(target.id);
+        this.battleUI.updateEnemyHp(target.id, target.hp, target.maxHp);
+        this.battleUI.showEnemyDamage(target.id, damage, isCritical);
+        if (target.hp > 0) {
+            return 0;
+        }
+        this.resolveEnemyDefeat(target);
+        return 1;
+    }
 
 
     private enemyGroupAttack = (): void => {
@@ -638,8 +761,8 @@ export class BattleSystem extends Component {
             this.refreshPlayerAttackTimer();
         }
 
-        this.refreshLivingMonsterGrowth();
         this.battleUI.removeEnemy(enemy.id);
+        this.recordTaskProgress(enemy);
     }
 
 
@@ -647,23 +770,16 @@ export class BattleSystem extends Component {
 
         this.updateRunUI();
         this.updateBuildUI();
-        this.battleUI.updateWave(
-            this.currentWave,
-            this.totalWaves,
-            this.getLivingEnemies().length
-        );
+        this.updateBattleStatus();
+
+        if (this.battleComplete) {
+            return;
+        }
 
         // 升级选择只叠加 UI，不停止刷怪、移动、攻击或计时。
         this.showPendingUpgradeChoices();
 
-        if (this.timelineComplete && this.getLivingEnemies().length === 0) {
-            this.finishStage();
-            return;
-        }
-
-        if (this.getLivingEnemies().length === 0) {
-            this.spawnNextNormalPackImmediately();
-        }
+        this.spawnForCurrentTask();
     }
 
 
@@ -675,34 +791,23 @@ export class BattleSystem extends Component {
             return;
         }
 
-        const skillAvailable = this.upgradeCardGenerator.hasAvailableCards(
-            'skill'
-        );
-        const actualBondAvailable =
-            this.buildRuntime.selectedBondIds.length > 0 &&
-            this.battleCardSystem.hasCombinedBondChoices();
-
-        if (!skillAvailable && !actualBondAvailable) {
-            this.upgradeManager.clearPendingLevelUps();
-            this.battleUI.hideUpgradeUI();
-            this.battleUI.addLog('本局携带内容均已满级，后续不再弹出升级卡。');
-            return;
-        }
-
         this.upgradeChoicesVisible = true;
         this.battleUI.showUpgradeCategoryPrompt(
             pendingLevelUps,
-            skillAvailable,
-            actualBondAvailable,
-            (kind) => this.onUpgradeCategorySelected(kind)
+            this.upgradeCardGenerator.hasAvailableCards('skill'),
+            true,
+            (kind) => this.showUpgradeChoices(kind)
         );
     }
 
 
-    private onUpgradeCategorySelected(kind: UpgradeCardKind): void {
+    private showUpgradeChoices(kind: UpgradeCardKind): void {
         const choices = kind === 'skill'
-            ? this.upgradeCardGenerator.generateUpgradeCards(3, kind)
-            : this.getBattleCardChoices(kind);
+            ? this.upgradeCardGenerator.generateUpgradeCards(
+                BATTLE_BALANCE.bondChoiceCount,
+                'skill'
+            )
+            : this.getBattleCardChoices();
 
         if (choices.length === 0) {
             this.upgradeChoicesVisible = false;
@@ -716,9 +821,20 @@ export class BattleSystem extends Component {
             (choice) => this.onUpgradeSelected(choice),
             () => {
                 this.upgradeChoicesVisible = false;
-                this.showPendingUpgradeChoices();
-            }
+                this.battleUI.hideUpgradeUI();
+            },
+            this.freeRefreshesRemaining,
+            () => this.refreshUpgradeChoices(kind)
         );
+    }
+
+
+    private refreshUpgradeChoices(kind: UpgradeCardKind): void {
+        if (this.freeRefreshesRemaining <= 0) {
+            return;
+        }
+        this.freeRefreshesRemaining--;
+        this.showUpgradeChoices(kind);
     }
 
 
@@ -727,10 +843,20 @@ export class BattleSystem extends Component {
         const previousAttackInterval = this.runData.attackInterval;
         const previousMaxHp = this.runData.maxHp;
         const result = choice.kind === 'skill'
-            ? this.upgradeManager.selectUpgrade(choice)
+            ? {
+                success: true,
+                message: `获得本局技能强化【${choice.name}】`,
+                bonus: choice.bonus
+            }
+            : choice.sourceId.startsWith('fallback:')
+            ? {
+                success: true,
+                message: `获得通用成长【${choice.name}】`,
+                bonus: choice.bonus
+            }
             : this.battleCardSystem.selectCard(choice.sourceId);
 
-        if (result.success && choice.kind !== 'skill') {
+        if (result.success) {
             this.upgradeManager.consumePendingLevelUp();
         }
 
@@ -740,7 +866,6 @@ export class BattleSystem extends Component {
                 0,
                 this.runData.maxHp - previousMaxHp
             );
-            this.refreshLivingMonsterGrowth();
         }
 
         this.battleUI.addLog(result.message);
@@ -757,16 +882,62 @@ export class BattleSystem extends Component {
     }
 
 
-    private getBattleCardChoices(kind: UpgradeCardKind): UpgradeCard[] {
-        const choices = kind === 'bond'
-            ? this.battleCardSystem.getCombinedBondChoices(3)
-            : [];
-        return choices.map((choice) => {
+    private getBattleCardChoices(): UpgradeCard[] {
+        const choices = this.battleCardSystem.getCombinedBondChoices(
+            BATTLE_BALANCE.bondChoiceCount
+        );
+        const cards = choices.map((choice) => {
             const cardKind: UpgradeCardKind = choice.category === '基础卡'
                 ? 'basic'
                 : 'bond';
             return this.toUpgradeCard(choice, cardKind);
         });
+
+        const fallbackCards: UpgradeCard[] = [
+            {
+                id: 'basic:fallback-attack',
+                kind: 'basic',
+                sourceId: 'fallback:attack',
+                name: '即时攻势',
+                description: '本局攻击 +3%',
+                nextLevel: 0,
+                bonus: { attackPercent: 3 }
+            },
+            {
+                id: 'basic:fallback-health',
+                kind: 'basic',
+                sourceId: 'fallback:health',
+                name: '即时护体',
+                description: '本局最大生命 +5%',
+                nextLevel: 0,
+                bonus: { hpPercent: 5 }
+            },
+            {
+                id: 'basic:fallback-crit',
+                kind: 'basic',
+                sourceId: 'fallback:crit',
+                name: '即时精准',
+                description: '本局暴击 +1%',
+                nextLevel: 0,
+                bonus: { crit: 1 }
+            },
+            {
+                id: 'basic:fallback-defense',
+                kind: 'basic',
+                sourceId: 'fallback:defense',
+                name: '即时坚守',
+                description: '本局防御 +2',
+                nextLevel: 0,
+                bonus: { def: 2 }
+            }
+        ];
+        for (const fallback of fallbackCards) {
+            if (cards.length >= BATTLE_BALANCE.bondChoiceCount) {
+                break;
+            }
+            cards.push(fallback);
+        }
+        return cards;
     }
 
 
@@ -783,23 +954,6 @@ export class BattleSystem extends Component {
             nextLevel: 0,
             bonus: {}
         };
-    }
-
-
-    private spawnNextNormalPackImmediately(): void {
-
-        if (this.timelineComplete) {
-            return;
-        }
-
-        const events = this.battlePacingSystem.spawnNextPackNow();
-        if (events.length === 0) {
-            return;
-        }
-
-        this.battleUI.addLog('本批怪物已清空，下一批立即进入战场！');
-        this.handlePacingEvents(events, false);
-        this.updateBattleStatus();
     }
 
 
@@ -820,119 +974,248 @@ export class BattleSystem extends Component {
     }
 
 
-    private handlePacingEvents(
-        events: BattlePacingEvent[],
-        announce: boolean
-    ): void {
+    private getCurrentTask(): BattleTaskConfig {
+        return getFirstStageTask(this.currentWave);
+    }
 
-        let battlefieldChanged = false;
 
-        for (const event of events) {
-            if (event.type === 'wave-start') {
-                const carriedEnemyCount = this.getLivingEnemies().length;
-                this.currentWave = event.wave;
-                this.attackCursor = 0;
-                if (announce) {
-                    this.battleUI.addLog(
-                        carriedEnemyCount > 0
-                            ? `第${event.wave}波接续来袭！上一波${carriedEnemyCount}只与新怪同时压上。`
-                            : `第${event.wave}波接续来袭！`
-                    );
-                }
-                continue;
-            }
+    private startTask(taskId: number, announce = true): void {
+        const task = getFirstStageTask(taskId);
+        this.currentWave = task.id;
+        this.taskKillCount = 0;
+        this.taskEliteKillCount = 0;
+        this.nextEnemyIndex = 0;
+        this.nextEliteThresholdIndex = 0;
+        this.finalBossPhase = false;
+        this.taskBossId = null;
+        this.attackCursor = 0;
+        this.enemies = [];
+        this.battleUI.clearEnemyGroup();
 
-            if (event.type === 'spawn-pack') {
-                const packSize = getNormalPackSize(
-                    event.wave,
-                    event.packIndex
-                );
-                const startIndex = getNormalPackStartIndex(
-                    event.wave,
-                    event.packIndex
-                );
-                const spawnedEnemies = createNormalEnemyPack(
-                    event.wave,
-                    startIndex,
-                    packSize,
-                    this.getMonsterGrowthContext()
-                );
-                this.prepareSpawnedEnemies(spawnedEnemies);
-                this.enemies.push(...spawnedEnemies);
-                battlefieldChanged = true;
-                continue;
-            }
+        if (announce) {
+            this.battleUI.addLog(`主线 1-${task.id}【${task.title}】开始！`);
+        }
+        if (task.kind === 'vanguard-boss') {
+            this.spawnTaskBoss(task, false);
+        }
+        this.spawnForCurrentTask();
+        this.updateBattleStatus();
+    }
 
-            if (event.type === 'spawn-elite') {
-                const elite = createEliteEnemy(
-                    event.wave,
-                    this.getMonsterGrowthContext()
-                );
-                this.prepareSpawnedEnemies([elite]);
-                this.enemies.push(elite);
-                battlefieldChanged = true;
-                if (announce) {
-                    this.battleUI.addLog(
-                        `${this.formatBattleTime(event.second)} 精英妖将降临！`
-                    );
-                }
-                continue;
-            }
 
-            if (event.type === 'spawn-boss') {
-                const boss = createBossEnemy(
-                    event.wave,
-                    999,
-                    this.getMonsterGrowthContext()
-                );
-                this.prepareSpawnedEnemies([boss]);
-                this.enemies.push(boss);
-                battlefieldChanged = true;
-                if (announce) {
-                    this.battleUI.addLog('最终30秒，镇关妖王降临！');
-                }
-                continue;
-            }
-
-            this.timelineComplete = true;
-            if (announce) {
-                this.battleUI.addLog('五分钟倒计时结束，本轮立即结算！');
-            }
+    private spawnForCurrentTask(): void {
+        if (this.isPaused || this.battleComplete || this.finalBossPhase) {
+            return;
         }
 
-        if (battlefieldChanged) {
-            this.renderCurrentWave();
+        const task = this.getCurrentTask();
+        this.spawnDueElites(task);
+        if (task.kind !== 'vanguard-boss' &&
+            this.taskKillCount >= task.killTarget) {
+            return;
         }
 
-        if (this.timelineComplete) {
-            this.finishStageAtTimeLimit();
+        const livingCount = this.getLivingEnemies().length;
+        const capacity = Math.max(
+            0,
+            Math.min(task.targetOnScreen, task.hardCap) - livingCount
+        );
+        const remainingObjective = task.kind === 'vanguard-boss'
+            ? Math.max(
+                0,
+                (task.supportMonsterLimit ?? 0) - this.nextEnemyIndex
+            )
+            : Math.max(0, task.killTarget - this.taskKillCount - livingCount);
+        const spawnCount = Math.min(
+            task.spawnBatchSize,
+            capacity,
+            remainingObjective
+        );
+
+        if (spawnCount <= 0) {
+            return;
+        }
+
+        const spawned = createNormalEnemyPack(
+            task.id,
+            this.nextEnemyIndex,
+            spawnCount,
+            DEFAULT_MONSTER_GROWTH_CONTEXT
+        );
+        this.nextEnemyIndex += spawnCount;
+        for (const enemy of spawned) {
+            enemy.expReward *= task.normalExpMultiplier;
+        }
+        this.prepareSpawnedEnemies(spawned);
+        this.enemies.push(...spawned);
+        this.renderCurrentWave();
+    }
+
+
+    private spawnDueElites(task: BattleTaskConfig): void {
+        while (
+            this.nextEliteThresholdIndex <
+                task.eliteSpawnKillThresholds.length &&
+            this.taskKillCount >=
+                task.eliteSpawnKillThresholds[this.nextEliteThresholdIndex]
+        ) {
+            if (this.getLivingEnemies().length >= task.hardCap) {
+                return;
+            }
+            const elite = createEliteEnemy(
+                task.id,
+                DEFAULT_MONSTER_GROWTH_CONTEXT,
+                900 + this.nextEliteThresholdIndex
+            );
+            elite.expReward *= task.normalExpMultiplier;
+            this.prepareSpawnedEnemies([elite]);
+            this.enemies.push(elite);
+            this.nextEliteThresholdIndex++;
+            this.battleUI.addLog('精英妖将降临！');
         }
     }
 
 
-    private updateBattleStatus(): void {
-        const livingCount = this.getLivingEnemies().length;
-
-        if (this.timelineComplete) {
-            this.battleUI.setStatus(
-                '5:00 · 本轮结算中'
-            );
-            return;
-        }
-
-        this.battleUI.setStatus(
-            `剩余 ${this.formatBattleTime(this.battlePacingSystem.getRemainingSeconds())}` +
-            ` · 第${this.currentWave}波 · 自动攻击${this.getMultiTargetCount()}目标` +
-            ` · 怪物 ${livingCount}`
+    private spawnTaskBoss(task: BattleTaskConfig, finalBoss: boolean): void {
+        const boss = createBossEnemy(
+            task.id,
+            999,
+            DEFAULT_MONSTER_GROWTH_CONTEXT,
+            task.bossHpMultiplier ?? 1,
+            task.bossAttackMultiplier ?? 1,
+            task.bossExpReward ?? BATTLE_BALANCE.bossExp,
+            finalBoss ? '终焉妖王' : '先锋妖王'
+        );
+        this.taskBossId = boss.id;
+        this.prepareSpawnedEnemies([boss]);
+        this.enemies.push(boss);
+        this.renderCurrentWave();
+        this.battleUI.addLog(
+            finalBoss ? '最终首领降临！' : '先锋首领率领怪潮来袭！'
         );
     }
 
 
-    private formatBattleTime(seconds: number): string {
-        const safeSeconds = Math.max(0, Math.floor(seconds));
-        const minutes = Math.floor(safeSeconds / 60);
-        const remainder = safeSeconds % 60;
-        return `${minutes}:${remainder < 10 ? '0' : ''}${remainder}`;
+    private recordTaskProgress(enemy: MonsterData): void {
+        if (this.battleComplete) {
+            return;
+        }
+        const task = this.getCurrentTask();
+
+        if (!enemy.isBoss) {
+            this.taskKillCount++;
+        }
+        if (enemy.isElite) {
+            this.taskEliteKillCount++;
+        }
+
+        if (enemy.isBoss && enemy.id === this.taskBossId) {
+            if (task.kind === 'final-battle' && this.finalBossPhase) {
+                this.battleComplete = true;
+                this.finishStage();
+                return;
+            }
+            if (task.kind === 'vanguard-boss') {
+                this.completeCurrentTask();
+                return;
+            }
+        }
+
+        if (task.kind === 'kill' &&
+            this.taskKillCount >= task.killTarget &&
+            this.taskEliteKillCount >= task.eliteKillTarget) {
+            this.completeCurrentTask();
+            return;
+        }
+
+        if (task.kind === 'final-battle' &&
+            !this.finalBossPhase &&
+            this.taskKillCount >= task.killTarget) {
+            this.beginFinalBoss(task);
+            return;
+        }
+
+        this.updateBattleStatus();
+    }
+
+
+    private completeCurrentTask(): void {
+        const task = this.getCurrentTask();
+        this.grantTaskReward(task);
+        if (task.id >= FIRST_STAGE_TASKS.length) {
+            return;
+        }
+        this.startTask(task.id + 1);
+    }
+
+
+    private beginFinalBoss(task: BattleTaskConfig): void {
+        this.grantTaskReward(task);
+        const recovery = Math.round(
+            this.runData.maxHp * (task.transitionHealPercent ?? 0)
+        );
+        if (recovery > 0) {
+            this.currentPlayerHp = Math.min(
+                this.runData.maxHp,
+                this.currentPlayerHp + recovery
+            );
+            this.battleUI.addLog(`决战恢复生命 ${recovery}！`);
+        }
+        this.finalBossPhase = true;
+        this.enemies = [];
+        this.battleUI.clearEnemyGroup();
+        this.spawnTaskBoss(task, true);
+        this.updateBattleStatus();
+    }
+
+
+    private grantTaskReward(task: BattleTaskConfig): void {
+        const previousMaxHp = this.runData.maxHp;
+        this.upgradeManager.addExp(task.taskExpReward);
+        this.upgradeManager.addPendingChoices(1);
+        this.currentPlayerHp += Math.max(
+            0,
+            this.runData.maxHp - previousMaxHp
+        );
+        this.totalExpReward += task.taskExpReward;
+        this.battleUI.addLog(
+            `完成 1-${task.id}，获得 ${task.taskExpReward} EXP 和 1 次羁绊选择！`
+        );
+        this.updateRunUI();
+    }
+
+
+    private updateBattleStatus(): void {
+        const task = this.getCurrentTask();
+        const livingCount = this.getLivingEnemies().length;
+        let progress = '';
+
+        if (task.kind === 'vanguard-boss') {
+            const boss = this.getLivingEnemies().find((enemy) => enemy.isBoss);
+            progress = boss
+                ? `首领 HP ${boss.hp}/${boss.maxHp}`
+                : '首领降临中';
+        } else if (task.kind === 'final-battle' && this.finalBossPhase) {
+            const boss = this.getLivingEnemies().find((enemy) => enemy.isBoss);
+            progress = boss
+                ? `最终首领 HP ${boss.hp}/${boss.maxHp}`
+                : '最终首领降临中';
+        } else {
+            progress = `击杀 ${Math.min(this.taskKillCount, task.killTarget)}/${task.killTarget}`;
+            if (task.eliteKillTarget > 0) {
+                progress += ` · 精英 ${Math.min(this.taskEliteKillCount, task.eliteKillTarget)}/${task.eliteKillTarget}`;
+            }
+        }
+
+        this.battleUI.setStatus(
+            `${progress} · 自动攻击${this.getMultiTargetCount()}目标 · 同屏 ${livingCount}/${task.hardCap}`
+        );
+        this.battleUI.updateTask(
+            task.id,
+            FIRST_STAGE_TASKS.length,
+            task.title,
+            progress
+        );
     }
 
 
@@ -960,7 +1243,7 @@ export class BattleSystem extends Component {
         this.isPaused = false;
 
         this.updateRunUI();
-        this.battleUI.addLog('恢复生命，继续清理本波剩余怪物！');
+        this.battleUI.addLog('恢复生命，继续当前主线任务！');
         this.startCombatTimers();
         this.showPendingUpgradeChoices();
     }
@@ -971,25 +1254,13 @@ export class BattleSystem extends Component {
         this.pauseCombat();
         this.upgradeChoicesVisible = false;
         this.battleUI.hideUpgradeUI();
-        this.battleUI.addLog('五分钟试炼完成！');
+        this.battleUI.addLog('五个主线任务完成，最终首领已被击败！');
         this.battleUI.showVictory(
             this.totalExpReward,
             this.totalGoldReward,
             () => this.restartStage(),
             this.onExit
         );
-    }
-
-
-    private finishStageAtTimeLimit(): void {
-        this.battleUI.clearEnemyGroup();
-        this.enemies = [];
-        this.battleUI.updateWave(
-            this.currentWave,
-            this.totalWaves,
-            0
-        );
-        this.finishStage();
     }
 
 
@@ -1022,9 +1293,7 @@ export class BattleSystem extends Component {
                 BATTLE_BALANCE.maxMonsterMoveSpeedMultiplier,
                 1 +
                 Math.max(0, enemy.wave - 1) *
-                    BATTLE_BALANCE.monsterMoveSpeedGrowthPerWave +
-                Math.max(0, this.challengeRound - 1) *
-                    BATTLE_BALANCE.monsterMoveSpeedGrowthPerRound
+                    BATTLE_BALANCE.monsterMoveSpeedGrowthPerWave
             );
             const baseSpeed = enemy.isBoss
                 ? BATTLE_BALANCE.bossMoveSpeed
@@ -1108,38 +1377,15 @@ export class BattleSystem extends Component {
     }
 
 
-    private getMonsterGrowthContext(): MonsterGrowthContext {
-        return {
-            playerPower: this.runData.maxHp +
-                this.runData.atk * 10 +
-                this.runData.def * 5 +
-                this.runData.crit * 10,
-            challengeRound: this.challengeRound,
-            playerAttack: this.runData.atk,
-            playerCrit: this.runData.crit,
-            playerCritDamageMultiplier: this.runData.critDamageMultiplier
-        };
-    }
-
-
-    private refreshLivingMonsterGrowth(): void {
-        const growthContext = this.getMonsterGrowthContext();
-        for (const enemy of this.getLivingEnemies()) {
-            applyMonsterGrowth(enemy, growthContext);
-            this.battleUI.updateEnemyHp(enemy.id, enemy.hp, enemy.maxHp);
-        }
-    }
-
-
     private getMultiTargetCount(): number {
-        return Math.min(
-            BATTLE_BALANCE.maxTargetCount,
-            BATTLE_BALANCE.baseTargetCount +
-            Math.floor(
-                (this.runData.level - 1) /
-                BATTLE_BALANCE.levelsPerExtraTarget
-            )
-        );
+        const skillLevel =
+            this.buildRuntime.skillLevels[NORMAL_ATTACK_SKILL_ID] ?? 1;
+        const config = getNormalAttackRuntimeConfig(skillLevel);
+        const awakeningReady = config.awakeningAttackInterval > 0 &&
+            this.awakeningCounter >= config.awakeningAttackInterval;
+        return awakeningReady
+            ? Math.max(1, config.awakeningMaxTargets)
+            : 1 + config.scatterExtraTargets;
     }
 
 
@@ -1147,11 +1393,11 @@ export class BattleSystem extends Component {
         for (const skillId of this.buildRuntime.selectedSkillIds) {
             const definition = getSkillDefinition(skillId);
             const level = this.buildRuntime.skillLevels[skillId] ?? 1;
-            const initialEffect = definition?.levelEffects.find((effect) => {
-                return effect.level === level;
-            });
-            if (initialEffect) {
-                this.runData.applyBonus(initialEffect.effect);
+            const unlockedEffects = definition?.levelEffects.filter((effect) => {
+                return effect.level <= level;
+            }) ?? [];
+            for (const effect of unlockedEffects) {
+                this.runData.applyBonus(effect.effect);
             }
         }
     }
@@ -1209,10 +1455,5 @@ export class BattleSystem extends Component {
     private renderCurrentWave(): void {
         const livingEnemies = this.getLivingEnemies();
         this.battleUI.showEnemyGroup(livingEnemies);
-        this.battleUI.updateWave(
-            this.currentWave,
-            this.totalWaves,
-            livingEnemies.length
-        );
     }
 }

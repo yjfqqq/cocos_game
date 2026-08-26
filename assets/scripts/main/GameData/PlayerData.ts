@@ -12,7 +12,9 @@ export interface PlayerAttributes {
 export interface PlayerSkillState {
     skillId: string;
     level: number;
-    exp: number;
+    fragments: number;
+    /** @deprecated 旧技能经验字段，仅保留兼容。 */
+    exp?: number;
 }
 
 export interface PlayerCardState {
@@ -55,7 +57,9 @@ export const gamePlayerData: PlayerData = {
     skills: [
         {
             skillId: 'normal-attack',
-            level: 1,
+            // 当前测试阶段直接解锁普攻完整机制。
+            level: 10,
+            fragments: 0,
             exp: 0
         }
     ],

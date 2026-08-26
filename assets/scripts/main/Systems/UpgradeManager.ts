@@ -7,6 +7,7 @@ import {
 } from './PlayerLevelSystem';
 import { SKILL_DEFINITIONS } from '../GameData/SkillData';
 import type { UpgradeCard } from './UpgradeCardGenerator';
+import { BATTLE_BALANCE } from '../BattleBalance';
 
 
 export interface UpgradeExpResult {
@@ -41,11 +42,19 @@ export class UpgradeManager {
 
     addExp(amount: number): UpgradeExpResult {
         const result = this.playerLevelSystem.addExp(amount);
-        this.runtime.pendingLevelUps += result.levelsGained;
+        this.runtime.pendingLevelUps += result.reachedLevels.filter((level) => {
+            return level % BATTLE_BALANCE.bondChoiceLevelInterval === 0;
+        }).length;
         return {
             ...result,
             pendingLevelUps: this.runtime.pendingLevelUps
         };
+    }
+
+
+    addPendingChoices(amount = 1): number {
+        this.runtime.pendingLevelUps += Math.max(0, Math.floor(amount));
+        return this.runtime.pendingLevelUps;
     }
 
 

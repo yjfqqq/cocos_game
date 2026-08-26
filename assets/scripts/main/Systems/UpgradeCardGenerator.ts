@@ -1,6 +1,9 @@
 import type { StatModifier } from '../GameData/EffectData';
 import type { BattleBuildRuntime } from '../GameData/BattleBuildData';
-import { SKILL_DEFINITIONS } from '../GameData/SkillData';
+import {
+    BATTLE_SKILL_UPGRADES,
+    SKILL_DEFINITIONS
+} from '../GameData/SkillData';
 
 
 export type UpgradeCardKind = 'skill' | 'bond' | 'basic';
@@ -58,25 +61,20 @@ export class UpgradeCardGenerator {
             const definition = SKILL_DEFINITIONS.find((skill) => {
                 return skill.skillId === skillId;
             });
-            const currentLevel = this.runtime.skillLevels[skillId] ?? 0;
-            const nextLevel = currentLevel + 1;
-            const levelEffect = definition?.levelEffects.find((effect) => {
-                return effect.level === nextLevel;
-            });
-
-            if (!definition || currentLevel >= definition.maxLevel || !levelEffect) {
+            if (!definition) {
                 continue;
             }
-
-            cards.push({
-                id: `skill:${skillId}:${nextLevel}`,
-                kind: 'skill',
-                sourceId: skillId,
-                name: `${definition.skillName}强化 Lv.${nextLevel}`,
-                description: levelEffect.description ?? '技能获得强化',
-                nextLevel,
-                bonus: { ...levelEffect.effect }
-            });
+            for (const upgrade of BATTLE_SKILL_UPGRADES) {
+                cards.push({
+                    id: `skill:${skillId}:${upgrade.id}`,
+                    kind: 'skill',
+                    sourceId: skillId,
+                    name: `${definition.skillName}·${upgrade.name}`,
+                    description: upgrade.description,
+                    nextLevel: 0,
+                    bonus: { ...upgrade.bonus }
+                });
+            }
         }
 
         return cards;

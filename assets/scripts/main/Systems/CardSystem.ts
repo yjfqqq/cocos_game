@@ -48,7 +48,10 @@ export class CardSystem {
     private choiceCount = 0;
 
 
-    constructor(private readonly bondSystem: BondSystem) {}
+    constructor(
+        private readonly bondSystem: BondSystem,
+        private readonly random: () => number = Math.random
+    ) {}
 
 
     getBasicChoices(count = 3): CardChoice[] {
@@ -86,28 +89,25 @@ export class CardSystem {
     }
 
 
-    // 基础卡属于羁绊卡池：优先按“羁绊、基础、羁绊”交错展示，
-    // 任一子池不足时由另一子池补足，仍共用同一套10格吞噬空间。
-    getCombinedBondChoices(count = 3): CardChoice[] {
-        const bondChoices = this.getBondChoices(count);
-        const basicChoices = this.getBasicChoices(count);
-        const choices: CardChoice[] = [];
-        let bondIndex = 0;
-        let basicIndex = 0;
+    // 合法池无放回抽取，同一组不会出现重复卡牌；刷新会重新抽取。
+    getCombinedBondChoices(count = 4): CardChoice[] {
+        const candidates = [
+            ...this.getBondChoices(Math.max(count, 6)),
+            ...this.getBasicChoices(Math.max(count, NORMAL_CARDS.length))
+        ].filter((choice, index, items) => {
+            return items.findIndex((item) => item.id === choice.id) === index;
+        });
 
-        while (
-            choices.length < count &&
-            (bondIndex < bondChoices.length || basicIndex < basicChoices.length)
-        ) {
-            if (bondIndex < bondChoices.length && choices.length < count) {
-                choices.push(bondChoices[bondIndex++]);
-            }
-            if (basicIndex < basicChoices.length && choices.length < count) {
-                choices.push(basicChoices[basicIndex++]);
-            }
+        for (let index = candidates.length - 1; index > 0; index--) {
+            const swapIndex = Math.min(
+                index,
+                Math.floor(this.random() * (index + 1))
+            );
+            [candidates[index], candidates[swapIndex]] =
+                [candidates[swapIndex], candidates[index]];
         }
 
-        return choices;
+        return candidates.slice(0, count);
     }
 
 

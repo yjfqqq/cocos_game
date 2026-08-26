@@ -122,7 +122,7 @@ export class BattleUI {
         this.createLabel(
             topBar,
             'Title',
-            '怪潮试炼',
+            '第一关 · 主线征战',
             -410,
             0,
             25,
@@ -142,7 +142,7 @@ export class BattleUI {
         this.waveText = this.createLabel(
             topBar,
             'Wave',
-            '第 1 / 10 波',
+            '主线 1-1 / 1-5',
             430,
             10,
             20,
@@ -488,6 +488,16 @@ export class BattleUI {
             `第 ${current} / ${total} 波 · 本波剩余 ${remaining} 只`;
     }
 
+    updateTask(
+        current: number,
+        total: number,
+        title: string,
+        progress: string
+    ): void {
+        this.waveText.string =
+            `主线 1-${current} / 1-${total} · ${title} · ${progress}`;
+    }
+
     updateFactionProgress(text: string): void {
         this.factionProgressText.string = text;
     }
@@ -553,7 +563,7 @@ export class BattleUI {
             panel,
             'SkillUpgradeButton',
             '技能',
-            '普攻卡池',
+            '本局强化 · 四选一',
             -95,
             skillAvailable,
             new Color(38, 96, 126),
@@ -563,7 +573,7 @@ export class BattleUI {
             panel,
             'BondUpgradeButton',
             '羁绊',
-            '天宫 / 基础',
+            '羁绊构筑 · 四选一',
             95,
             bondAvailable,
             new Color(91, 57, 120),
@@ -576,7 +586,9 @@ export class BattleUI {
         choices: UpgradeCard[],
         pendingLevelUps: number,
         onSelect: (choice: UpgradeCard) => void,
-        onBack: () => void
+        onBack: () => void,
+        refreshesRemaining = 0,
+        onRefresh?: () => void
     ): void {
         this.hideUpgradeUI();
 
@@ -585,7 +597,7 @@ export class BattleUI {
         const panel = this.createPanel(
             this.root,
             'UpgradeChoicePanel',
-            920,
+            1120,
             420,
             0,
             45,
@@ -610,7 +622,7 @@ export class BattleUI {
             panel,
             'RunningHint',
             '战斗仍在继续',
-            -380,
+            -490,
             184,
             15,
             new Color(116, 215, 161)
@@ -621,14 +633,14 @@ export class BattleUI {
             'BackToUpgradeCategory',
             116,
             42,
-            380,
+            490,
             181,
             new Color(54, 62, 82)
         );
         this.createLabel(
             backNode,
             'Label',
-            '返回分类',
+            '稍后选择',
             0,
             0,
             17,
@@ -641,11 +653,43 @@ export class BattleUI {
             onBack();
         });
 
+        if (onRefresh) {
+            const refreshNode = this.createPanel(
+                panel,
+                'RefreshChoices',
+                180,
+                42,
+                330,
+                181,
+                refreshesRemaining > 0
+                    ? new Color(64, 91, 126)
+                    : new Color(54, 58, 68)
+            );
+            this.createLabel(
+                refreshNode,
+                'Label',
+                `刷新（剩余 ${refreshesRemaining}）`,
+                0,
+                0,
+                16,
+                refreshesRemaining > 0
+                    ? Color.WHITE
+                    : new Color(130, 135, 148)
+            );
+            if (refreshesRemaining > 0) {
+                const refreshButton = refreshNode.addComponent(Button);
+                refreshButton.transition = Button.Transition.NONE;
+                refreshNode.on(Button.EventType.CLICK, () => onRefresh());
+            }
+        }
+
         const positions = choices.length === 1
             ? [0]
             : choices.length === 2
                 ? [-150, 150]
-                : [-290, 0, 290];
+                : choices.length === 3
+                    ? [-290, 0, 290]
+                    : [-390, -130, 130, 390];
 
         for (let i = 0; i < choices.length; i++) {
             const choice = choices[i];
@@ -869,8 +913,14 @@ export class BattleUI {
     // =====================================================
 
     showEnemyGroup(enemies: EnemyViewData[]): void {
-
-        this.clearEnemyGroup();
+        const livingIds = new Set(enemies.map((enemy) => enemy.id));
+        for (const [id, view] of this.enemyViews) {
+            if (!livingIds.has(id)) {
+                view.node.removeFromParent();
+                view.node.destroy();
+                this.enemyViews.delete(id);
+            }
+        }
 
         // 远程单位排在战场后排，近战单位铺在前排。
         const ordered = [...enemies].sort((a, b) => {
@@ -897,6 +947,14 @@ export class BattleUI {
             const row = Math.floor(i / columns);
             const positionX = enemy.positionX ?? startX + column * gapX;
             const positionY = enemy.positionY ?? startY - row * gapY;
+            const existingView = this.enemyViews.get(enemy.id);
+            if (existingView) {
+                existingView.node.setPosition(positionX, positionY, 0);
+                existingView.node.active =
+                    positionX <= BATTLE_BALANCE.monsterVisibleRightX;
+                this.updateEnemyHp(enemy.id, enemy.hp, enemy.maxHp);
+                continue;
+            }
             const node = this.createPanel(
                 this.enemyField,
                 `Enemy_${enemy.id}`,
@@ -1114,7 +1172,7 @@ export class BattleUI {
         this.createLabel(
             panel,
             'Title',
-            '五分钟通关！',
+            '最终首领已击败！',
             0,
             110,
             42,
@@ -1142,7 +1200,7 @@ export class BattleUI {
         );
 
 
-        // 开始下一轮五分钟挑战
+        // 使用相同战前配置开始新一局，局内成长全部重置。
         const continueBtn = this.createPanel(
             panel,
             'ContinueButton',

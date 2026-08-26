@@ -21,7 +21,7 @@ export class BattleRunData {
 
     playerLevel = 1;
     playerExp = 0;
-    expToNextLevel: number = BATTLE_BALANCE.initialRunLevelExp;
+    expToNextLevel: number = BATTLE_BALANCE.runLevelExpTable[0];
     attributes: PlayerAttributes;
 
     private attackPercent = 0;
@@ -113,5 +113,9 @@ export class BattleRunData {
 
     get healthRegenBonus(): number {
         return this.healthRegenPercent;
+    }
+
+    get skillDamageMultiplier(): number {
+        return 1 + this.skillDamagePercent / 100;
     }
 }

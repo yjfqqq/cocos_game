@@ -23,7 +23,8 @@ export interface MonsterGrowthScale {
 }
 
 
-// 单局节奏集中配置：调整这一处即可控制怪量、升级速度和攻击目标数。
+// 第一关战斗数值集中配置。任务结构位于 BattleTaskData；
+// 这里不允许根据玩家战力反向提高怪物属性。
 export const BATTLE_BALANCE = {
     waveEnemyCounts: [30, 36, 42, 48, 58, 70, 80, 90, 98, 108],
     meleeRatio: 0.5,
@@ -35,22 +36,29 @@ export const BATTLE_BALANCE = {
     normalHpPerWave: 3,
     normalBaseDefense: 0,
     normalDefenseWaveInterval: 3,
-    meleeBaseAttack: 3.5,
-    meleeAttackPerWave: 0.5,
-    rangedBaseAttack: 5,
-    rangedAttackPerWave: 0.6,
+    meleeBaseAttack: 2,
+    meleeAttackPerWave: 0.3,
+    rangedBaseAttack: 3,
+    rangedAttackPerWave: 0.4,
     bossExp: 100,
     bossGold: 50,
     bossBaseHp: 500,
     bossHpPerWave: 25,
-    bossBaseDefense: 6,
-    bossDefensePerWave: 1.2,
-    bossBaseAttack: 15,
-    bossAttackPerWave: 1.2,
-    initialRunLevelExp: 30,
-    runLevelExpGrowth: 8,
-    maxRunLevelExp: 120,
+    bossBaseDefense: 4,
+    bossDefensePerWave: 0.8,
+    bossBaseAttack: 10,
+    bossAttackPerWave: 0.8,
     maxRunLevel: 50,
+    runLevelExpTable: [
+        50, 60, 70, 80, 90, 105, 120, 140, 160, 190,
+        220, 250, 285, 320, 360, 400, 445, 490, 540, 600,
+        660, 725, 795, 870, 950, 1035, 1125, 1220, 1320, 1430,
+        1550, 1680, 1820, 1970, 2130, 2300, 2480, 2670, 2870, 3100,
+        3350, 3620, 3910, 4220, 4550, 4900, 5280, 5680, 6100
+    ],
+    bondChoiceLevelInterval: 2,
+    bondChoiceCount: 4,
+    freeRefreshesPerRun: 2,
     basicCardOfferEvery: 4,
     baseTargetCount: 1,
     levelsPerExtraTarget: 4,
@@ -80,23 +88,11 @@ export const BATTLE_BALANCE = {
     enhancedHitsMultiplier: 1.35,
     enhancedMoveSpeedMultiplier: 0.92,
 
-    // 怪物会追随玩家的实际战力成长，但只继承部分成长幅度，
-    // 因此装备、神器和局内构筑依然能带来明确的变强体验。
+    // 固定关卡成长：仅由任务阶段决定，不读取玩家战力或挑战轮次。
     monsterReferencePlayerPower: 275,
-    monsterHpGrowthPerPlayerPower: 0.55,
-    monsterAttackGrowthPerPlayerPower: 0.25,
-    monsterDefenseGrowthPerPlayerPower: 1.25,
-    monsterHpGrowthPerWave: 0.07,
-    monsterHpGrowthPerRound: 0.55,
-    monsterAttackGrowthPerRound: 0.25,
-    monsterDefenseGrowthPerRound: 2,
-
-    // 前两波允许快速清怪发育；第三波起逐步提高最低承伤次数，
-    // 防止后期攻击暴涨后仍然一刀清怪。
-    monsterBaseHitsToDefeat: 0.85,
-    monsterHitsGrowthStartWave: 2,
-    monsterHitsGrowthPerWave: 0.45,
-    monsterHitsGrowthPerRound: 1.25,
+    monsterHpGrowthPerWave: 0.16,
+    monsterAttackGrowthPerWave: 0.1,
+    monsterDefenseGrowthPerWave: 0.5,
     eliteHitsMultiplier: 2.5,
     bossHitsMultiplier: 6,
 
@@ -129,65 +125,27 @@ export const DEFAULT_MONSTER_GROWTH_CONTEXT: MonsterGrowthContext = {
 };
 
 
-// 将玩家战力换算为怪物的部分追赶倍率。波次基础成长仍由怪物工厂负责，
-// 这里额外覆盖玩家属性成长和重复挑战带来的难度提升。
+// 怪物倍率只读取固定任务阶段。context 参数仅为兼容旧工厂调用保留，
+// 不参与生命、攻击或防御计算。
 export function getMonsterGrowthScale(
     wave: number,
-    context: MonsterGrowthContext = DEFAULT_MONSTER_GROWTH_CONTEXT
+    _context: MonsterGrowthContext = DEFAULT_MONSTER_GROWTH_CONTEXT
 ): MonsterGrowthScale {
-
-    const safePlayerPower = Number.isFinite(context.playerPower)
-        ? Math.max(
-            BATTLE_BALANCE.monsterReferencePlayerPower,
-            context.playerPower
-        )
-        : BATTLE_BALANCE.monsterReferencePlayerPower;
-    const playerGrowth =
-        safePlayerPower / BATTLE_BALANCE.monsterReferencePlayerPower - 1;
-    const completedRounds = Number.isFinite(context.challengeRound)
-        ? Math.max(0, Math.floor(context.challengeRound) - 1)
-        : 0;
     const safeWave = Number.isFinite(wave)
         ? Math.max(1, Math.floor(wave))
         : 1;
-    const playerAttack = Number.isFinite(context.playerAttack)
-        ? Math.max(1, context.playerAttack ?? 1)
-        : DEFAULT_MONSTER_GROWTH_CONTEXT.playerAttack ?? 10;
-    const playerCrit = Number.isFinite(context.playerCrit)
-        ? Math.min(100, Math.max(0, context.playerCrit ?? 0))
-        : DEFAULT_MONSTER_GROWTH_CONTEXT.playerCrit ?? 5;
-    const critDamageMultiplier = Number.isFinite(
-        context.playerCritDamageMultiplier
-    )
-        ? Math.max(1, context.playerCritDamageMultiplier ?? 1)
-        : DEFAULT_MONSTER_GROWTH_CONTEXT.playerCritDamageMultiplier ?? 1.5;
-    const expectedPlayerHit = playerAttack * (
-        1 + playerCrit / 100 * (critDamageMultiplier - 1)
-    );
 
     return {
         hpMultiplier: 1 +
-            playerGrowth * BATTLE_BALANCE.monsterHpGrowthPerPlayerPower +
-            (safeWave - 1) * BATTLE_BALANCE.monsterHpGrowthPerWave +
-            completedRounds * BATTLE_BALANCE.monsterHpGrowthPerRound,
+            (safeWave - 1) * BATTLE_BALANCE.monsterHpGrowthPerWave,
         attackMultiplier: 1 +
-            playerGrowth * BATTLE_BALANCE.monsterAttackGrowthPerPlayerPower +
-            completedRounds * BATTLE_BALANCE.monsterAttackGrowthPerRound,
+            (safeWave - 1) * BATTLE_BALANCE.monsterAttackGrowthPerWave,
         defenseBonus: Math.floor(
-            playerGrowth * BATTLE_BALANCE.monsterDefenseGrowthPerPlayerPower +
-            completedRounds * BATTLE_BALANCE.monsterDefenseGrowthPerRound
+            (safeWave - 1) * BATTLE_BALANCE.monsterDefenseGrowthPerWave
         ),
-        level: safeWave +
-            Math.floor(playerGrowth * 5) +
-            completedRounds * BATTLE_BALANCE.waveEnemyCounts.length,
-        expectedPlayerHit,
-        targetHitsToDefeat:
-            BATTLE_BALANCE.monsterBaseHitsToDefeat +
-            Math.max(
-                0,
-                safeWave - BATTLE_BALANCE.monsterHitsGrowthStartWave
-            ) * BATTLE_BALANCE.monsterHitsGrowthPerWave +
-            completedRounds * BATTLE_BALANCE.monsterHitsGrowthPerRound
+        level: safeWave,
+        expectedPlayerHit: 0,
+        targetHitsToDefeat: 0
     };
 }
 

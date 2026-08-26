@@ -17,7 +17,9 @@ import {
 } from 'cc';
 
 import {
-    playerData
+    gamePlayerData,
+    playerData,
+    spendGold
 } from './PlayerData';
 
 import {
@@ -50,8 +52,11 @@ import {
 } from './GameData/BattleBuildData';
 import {
     getSkillDefinition,
+    getSkillLevelDefinition,
+    SKILL_FRAGMENT_SHOP_CONFIG,
     NORMAL_ATTACK_SKILL_ID
 } from './GameData/SkillData';
+import { SkillSystem } from './Systems/SkillSystem';
 import {
     getBondDefinition
 } from './GameData/BondData';
@@ -71,6 +76,7 @@ export class MainUIBuilder extends Component {
     private shopMessage = '';
     private bagMessage = '';
     private artifactMessage = '';
+    private readonly skillSystem = new SkillSystem(gamePlayerData.skills);
 
     private readonly artFrames: Map<string, SpriteFrame> = new Map();
     private readonly artPaths: Record<string, string> = {
@@ -1614,71 +1620,196 @@ export class MainUIBuilder extends Component {
         );
 
 
-        // 商店商品。先提供一个完整的战斗资源闭环商品，
-        // 其他类型会随神器、宝箱系统接入。
-        const products = [
-            {
-                id: 'cultivation-pill',
-                name: '修炼丹',
-                desc: '背包使用后获得 50 经验',
-                price: 20
+        const itemCard = this.createPanel(
+            page,
+            'Product_修炼丹',
+            500,
+            330,
+            -275,
+            20,
+            new Color(31, 36, 54)
+        );
+        this.createLabel(itemCard, 'ProdName', '修炼丹', 0, 130, 28, Color.WHITE);
+        this.createLabel(
+            itemCard,
+            'ProdDesc',
+            '背包使用后获得 50 经验',
+            0,
+            80,
+            22,
+            new Color(180, 185, 205)
+        );
+        this.createLabel(
+            itemCard,
+            'ProdPrice',
+            '价格：20 金币',
+            0,
+            30,
+            24,
+            new Color(235, 205, 120)
+        );
+        const buyItemButton = this.createPanel(
+            itemCard,
+            'Buy_修炼丹',
+            220,
+            60,
+            0,
+            -90,
+            new Color(52, 59, 84)
+        );
+        const buyItemLabel = this.createLabel(
+            buyItemButton,
+            'Label',
+            '购买',
+            0,
+            0,
+            24,
+            Color.WHITE
+        );
+        this.setLabelHitArea(buyItemLabel, 220, 60);
+        const itemButton = buyItemButton.addComponent(Button);
+        this.configureButton(itemButton);
+        buyItemButton.on(Button.EventType.CLICK, () => {
+            const result = buyItem('cultivation-pill');
+            this.shopMessage = result.message;
+            this.build('商店');
+        });
+
+        const skillDefinition = getSkillDefinition(NORMAL_ATTACK_SKILL_ID);
+        const skillState = this.skillSystem.getSkillState(
+            NORMAL_ATTACK_SKILL_ID
+        );
+        const isSkillMax = (skillState?.level ?? 1) >=
+            (skillDefinition?.maxLevel ?? 10);
+        const requiredFragments = isSkillMax
+            ? 0
+            : getSkillLevelDefinition(
+                NORMAL_ATTACK_SKILL_ID,
+                (skillState?.level ?? 1) + 1
+            )?.fragmentsRequired ?? 0;
+        const currentLevelDescription = getSkillLevelDefinition(
+            NORMAL_ATTACK_SKILL_ID,
+            skillState?.level ?? 1
+        )?.description ?? '';
+        const skillCard = this.createPanel(
+            page,
+            'SkillFragmentDraw',
+            500,
+            330,
+            275,
+            20,
+            new Color(29, 42, 58)
+        );
+        this.createLabel(
+            skillCard,
+            'SkillName',
+            `普攻 Lv.${skillState?.level ?? 1} / ${skillDefinition?.maxLevel ?? 10}`,
+            0,
+            130,
+            28,
+            new Color(126, 211, 237)
+        );
+        this.createLabel(
+            skillCard,
+            'SkillEffect',
+            currentLevelDescription,
+            0,
+            88,
+            17,
+            new Color(180, 198, 214)
+        );
+        this.createLabel(
+            skillCard,
+            'Fragments',
+            isSkillMax
+                ? `普攻碎片：${skillState?.fragments ?? 0} · 已满级`
+                : `普攻碎片：${skillState?.fragments ?? 0} / ${requiredFragments}`,
+            0,
+            42,
+            21,
+            new Color(235, 205, 120)
+        );
+
+        const drawButtonNode = this.createPanel(
+            skillCard,
+            'DrawSkillFragments',
+            205,
+            58,
+            -112,
+            -85,
+            new Color(38, 96, 126)
+        );
+        const drawLabel = this.createLabel(
+            drawButtonNode,
+            'Label',
+            `抽取 ${SKILL_FRAGMENT_SHOP_CONFIG.drawCostGold}金币`,
+            0,
+            0,
+            20,
+            Color.WHITE
+        );
+        this.setLabelHitArea(drawLabel, 205, 58);
+        const drawButton = drawButtonNode.addComponent(Button);
+        this.configureButton(drawButton);
+        drawButtonNode.on(Button.EventType.CLICK, () => {
+            if (!spendGold(SKILL_FRAGMENT_SHOP_CONFIG.drawCostGold)) {
+                this.shopMessage = '金币不足，无法抽取技能碎片';
+                this.build('商店');
+                return;
             }
-        ];
-        const prodX = [0];
-
-        for (let i = 0; i < products.length; i++) {
-
-            const p = products[i];
-
-            const card = this.createPanel(
-                page,
-                'Product_' + p.name,
-                460,
-                330,
-                prodX[i],
-                20,
-                new Color(31, 36, 54)
+            const fragmentCount =
+                SKILL_FRAGMENT_SHOP_CONFIG.drawMinFragments +
+                Math.floor(
+                    Math.random() * (
+                        SKILL_FRAGMENT_SHOP_CONFIG.drawMaxFragments -
+                        SKILL_FRAGMENT_SHOP_CONFIG.drawMinFragments + 1
+                    )
+                );
+            const result = this.skillSystem.addSkillFragments(
+                NORMAL_ATTACK_SKILL_ID,
+                fragmentCount
             );
+            this.shopMessage = result.message;
+            this.build('商店');
+        });
 
-            this.createLabel(card, 'ProdName', p.name, 0, 130, 28, Color.WHITE);
-            this.createLabel(card, 'ProdDesc', p.desc, 0, 80, 22, new Color(180, 185, 205));
-            this.createLabel(card, 'ProdPrice', `价格：${p.price} 金币`, 0, 30, 24, new Color(235, 205, 120));
-
-            // 购买按钮（真正的 Button）
-            const buy = this.createPanel(
-                card,
-                'Buy_' + p.name,
-                220,
-                60,
-                0,
-                -90,
-                new Color(52, 59, 84)
-            );
-
-            const buyLabel = this.createLabel(buy, 'Label', '购买', 0, 0, 24, Color.WHITE);
-            const buyTf = buyLabel.node.getComponent(UITransform);
-
-            if (buyTf) {
-                buyTf.setContentSize(220, 60);
-            }
-
-            const buyBtn = buy.addComponent(Button);
-            this.configureButton(buyBtn);
-
-            buy.on(
-                Button.EventType.CLICK,
-                () => {
-                    const result = buyItem(p.id);
-                    this.shopMessage = result.message;
-                    this.build('商店');
-                }
-            );
+        const upgradeButtonNode = this.createPanel(
+            skillCard,
+            'UpgradeNormalAttack',
+            205,
+            58,
+            112,
+            -85,
+            isSkillMax
+                ? new Color(54, 58, 68)
+                : new Color(91, 57, 120)
+        );
+        const upgradeLabel = this.createLabel(
+            upgradeButtonNode,
+            'Label',
+            isSkillMax ? '已满级' : '碎片升级',
+            0,
+            0,
+            20,
+            isSkillMax ? new Color(145, 150, 160) : Color.WHITE
+        );
+        this.setLabelHitArea(upgradeLabel, 205, 58);
+        if (!isSkillMax) {
+            const upgradeButton = upgradeButtonNode.addComponent(Button);
+            this.configureButton(upgradeButton);
+            upgradeButtonNode.on(Button.EventType.CLICK, () => {
+                const result = this.skillSystem.upgradeWithFragments(
+                    NORMAL_ATTACK_SKILL_ID
+                );
+                this.shopMessage = result.message;
+                this.build('商店');
+            });
         }
 
         this.createLabel(
             page,
             'ShopMessage',
-            this.shopMessage || '战斗胜利可获得金币。',
+            this.shopMessage || '抽取普攻碎片，满足需求后可永久提升技能等级。',
             0,
             -205,
             20,

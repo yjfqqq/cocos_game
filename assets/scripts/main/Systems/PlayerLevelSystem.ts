@@ -10,6 +10,7 @@ export interface PlayerLevelState {
     playerExp: number;
     expToNextLevel: number;
     attributes: PlayerAttributes;
+    applyBonus?: (bonus: StatModifier) => void;
 }
 
 export interface PlayerLevelPolicy {
@@ -20,6 +21,7 @@ export interface PlayerLevelPolicy {
 
 export interface PlayerLevelResult {
     levelsGained: number;
+    reachedLevels: number[];
     attributeGrowth: StatModifier;
 }
 
@@ -31,17 +33,42 @@ export const PERSISTENT_PLAYER_LEVEL_POLICY: PlayerLevelPolicy = {
 
 export const BATTLE_RUN_LEVEL_POLICY: PlayerLevelPolicy = {
     maxLevel: BATTLE_BALANCE.maxRunLevel,
-    getExpToNextLevel: (level) => Math.min(
-        BATTLE_BALANCE.maxRunLevelExp,
-        BATTLE_BALANCE.initialRunLevelExp +
-            (level - 1) * BATTLE_BALANCE.runLevelExpGrowth
-    ),
-    getAttributeGrowth: (level) => ({
-        hp: 10,
-        atk: 1,
-        def: level % 2 === 0 ? 1 : 0,
-        crit: level % 5 === 0 ? 1 : 0
-    })
+    getExpToNextLevel: (level) =>
+        BATTLE_BALANCE.runLevelExpTable[level - 1] ??
+        Number.POSITIVE_INFINITY,
+    getAttributeGrowth: (level) => {
+        const attackPercent = level <= 10
+            ? 1
+            : level <= 20
+                ? 1.5
+                : level <= 30
+                    ? 2
+                    : level <= 40
+                        ? 2.5
+                        : 3;
+        const hpPercent = level <= 10
+            ? 0.5
+            : level <= 20
+                ? 0.75
+                : level <= 30
+                    ? 1
+                    : level <= 40
+                        ? 1.25
+                        : 1.5;
+        const milestoneAttack = level === 10
+            ? 5
+            : level === 30 || level === 40
+                ? 10
+                : level === 50
+                    ? 15
+                    : 0;
+        const milestoneHp = level === 20 || level === 40 ? 10 : 0;
+
+        return {
+            attackPercent: attackPercent + milestoneAttack,
+            hpPercent: hpPercent + milestoneHp
+        };
+    }
 };
 
 
@@ -62,18 +89,27 @@ export class PlayerLevelSystem {
         const totalGrowth: StatModifier = {};
 
         if (amount <= 0) {
-            return { levelsGained: 0, attributeGrowth: totalGrowth };
+            return {
+                levelsGained: 0,
+                reachedLevels: [],
+                attributeGrowth: totalGrowth
+            };
         }
 
         const maxLevel = this.policy.maxLevel ?? Number.POSITIVE_INFINITY;
         if (this.state.playerLevel >= maxLevel) {
             this.state.playerExp = 0;
             this.recalculatePower();
-            return { levelsGained: 0, attributeGrowth: totalGrowth };
+            return {
+                levelsGained: 0,
+                reachedLevels: [],
+                attributeGrowth: totalGrowth
+            };
         }
 
         this.state.playerExp += amount;
         let levelsGained = 0;
+        const reachedLevels: number[] = [];
 
         while (
             this.state.playerLevel < maxLevel &&
@@ -82,6 +118,7 @@ export class PlayerLevelSystem {
             this.state.playerExp -= this.state.expToNextLevel;
             this.state.playerLevel++;
             levelsGained++;
+            reachedLevels.push(this.state.playerLevel);
 
             const growth = this.policy.getAttributeGrowth(this.state.playerLevel);
             this.applyLevelGrowth(growth);
@@ -102,7 +139,7 @@ export class PlayerLevelSystem {
 
         this.recalculatePower();
 
-        return { levelsGained, attributeGrowth: totalGrowth };
+        return { levelsGained, reachedLevels, attributeGrowth: totalGrowth };
     }
 
 
@@ -123,6 +160,10 @@ export class PlayerLevelSystem {
 
 
     private applyLevelGrowth(growth: StatModifier): void {
+        if (this.state.applyBonus) {
+            this.state.applyBonus(growth);
+            return;
+        }
         this.state.attributes.hp += growth.hp ?? 0;
         this.state.attributes.atk += growth.atk ?? 0;
         this.state.attributes.def += growth.def ?? 0;
@@ -131,9 +172,16 @@ export class PlayerLevelSystem {
 
 
     private mergeGrowth(target: StatModifier, growth: StatModifier): void {
-        target.hp = (target.hp ?? 0) + (growth.hp ?? 0);
-        target.atk = (target.atk ?? 0) + (growth.atk ?? 0);
-        target.def = (target.def ?? 0) + (growth.def ?? 0);
-        target.crit = (target.crit ?? 0) + (growth.crit ?? 0);
+        const keys: (keyof StatModifier)[] = [
+            'hp', 'atk', 'def', 'crit', 'attackPercent', 'hpPercent',
+            'defPercent', 'attackSpeedPercent', 'critDamagePercent',
+            'attackRangePercent', 'skillDamagePercent', 'healthRegenPercent'
+        ];
+        for (const key of keys) {
+            const value = growth[key];
+            if (value !== undefined) {
+                target[key] = (target[key] ?? 0) + value;
+            }
+        }
     }
 }
