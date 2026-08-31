@@ -1,7 +1,4 @@
 import {
-    BOND_DEFINITIONS
-} from './GameData/BondData';
-import {
     gamePlayerData
 } from './GameData/PlayerData';
 import {
@@ -22,8 +19,6 @@ export interface PlayerData {
     crit: number;
     power: number;
     bond: string;
-    /** @deprecated 旧字段名，仅供未迁移调用兼容。 */
-    faction: string;
     realm: string;
     gold: number;
     diamond: number;
@@ -60,25 +55,19 @@ export const playerData: PlayerData = {
     set power(value) { gamePlayerData.attributes.power = value; },
 
     get bond() {
-        return BOND_DEFINITIONS.find((item) => {
-            return item.bondId === gamePlayerData.currentBondId;
-        })?.bondName ?? gamePlayerData.currentBondId;
+        return gamePlayerData.currentBondId === 'three-kingdoms' ||
+            gamePlayerData.currentBondId === 'tiangong' ||
+            gamePlayerData.currentBondId === 'tiangong-bond'
+            ? '三国'
+            : gamePlayerData.currentBondId;
     },
     set bond(value) {
-        gamePlayerData.currentBondId = BOND_DEFINITIONS.find((item) => {
-            return item.bondId === value || item.bondName === value;
-        })?.bondId ?? value;
-    },
-
-    get faction() {
-        return BOND_DEFINITIONS.find((item) => {
-            return item.bondId === gamePlayerData.currentBondId;
-        })?.bondName ?? gamePlayerData.currentBondId;
-    },
-    set faction(value) {
-        gamePlayerData.currentBondId = BOND_DEFINITIONS.find((item) => {
-            return item.bondId === value || item.bondName === value;
-        })?.bondId ?? value;
+        gamePlayerData.currentBondId = value === '三国' ||
+            value === '天宫' ||
+            value === 'tiangong' ||
+            value === 'tiangong-bond'
+            ? 'three-kingdoms'
+            : value;
     },
 
     get realm() { return gamePlayerData.realm; },

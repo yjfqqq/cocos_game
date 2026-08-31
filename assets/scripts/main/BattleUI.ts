@@ -31,6 +31,12 @@ export interface BattleDebugActions {
     inspectSkillNodes: () => void;
     inspectBondCards: () => void;
     inspectWeights: () => void;
+    addCoreKills249: () => void;
+    addCoreKills1: () => void;
+    addFactionMaterial: () => void;
+    triggerCoreDevour: () => void;
+    setDevourSeven: () => void;
+    forceThreeUr: () => void;
     resetBuild: () => void;
 }
 
@@ -80,7 +86,7 @@ export class BattleUI {
     private playerStatText!: Label;
     private playerSecondaryStatText!: Label;
     private waveText!: Label;
-    private factionProgressText!: Label;
+    private threeKingdomsProgressText!: Label;
 
     private statusLabel!: Label;
     private logLabel!: Label;
@@ -88,7 +94,7 @@ export class BattleUI {
     private bondSlotLabels: Label[] = [];
     private bondSlotTitle!: Label;
     private spiritStoneText!: Label;
-    private comboText!: Label;
+    private exKillText!: Label;
     private bondDrawCostText!: Label;
     private bondDrawButton: Button | null = null;
     private bondDrawHandler: () => void = () => {};
@@ -176,15 +182,16 @@ export class BattleUI {
             new Color(235, 205, 120)
         );
 
-        this.factionProgressText = this.createLabel(
+        this.threeKingdomsProgressText = this.createLabel(
             topBar,
             'BondProgress',
-            '天宫羁绊 0/6层',
+            '魏未启动 | 蜀未启动 | 吴未启动 | 群未启动 | UR 0/3',
             0,
             -18,
-            15,
+            12,
             new Color(178, 190, 208)
         );
+        this.shrink(this.threeKingdomsProgressText, 1000, 42);
 
         // 中央全宽战场。
         this.enemyField = this.createPanel(
@@ -297,7 +304,7 @@ export class BattleUI {
         this.playerStatText = this.createLabel(
             playerHud,
             'RunStats',
-            '攻击 0 · 防御 0 · 暴击 0%',
+            '攻击 0 · 生命 0 · 防御 0',
             55,
             -15,
             14,
@@ -306,7 +313,7 @@ export class BattleUI {
         this.playerSecondaryStatText = this.createLabel(
             playerHud,
             'RunSecondaryStats',
-            '攻速 +0% · 技能 +0%',
+            '力量 0 · 敏捷 0 · 智力 0',
             0,
             -43,
             12,
@@ -389,10 +396,10 @@ export class BattleUI {
             16,
             new Color(113, 220, 221)
         );
-        this.comboText = this.createLabel(
+        this.exKillText = this.createLabel(
             bondHud,
-            'Combo',
-            'Combo 0',
+            'ExKillProgress',
+            'EX击杀 0/400',
             55,
             38,
             15,
@@ -537,16 +544,20 @@ export class BattleUI {
         exp: number,
         expToNext: number,
         atk: number,
+        maxHp: number,
         def: number,
-        crit: number,
-        secondaryStats: string
+        strength: number,
+        agility: number,
+        intelligence: number
     ): void {
         this.playerLevelText.string = `局内 Lv.${level}`;
         this.playerExpText.string = level >= BATTLE_BALANCE.maxRunLevel
             ? '局内经验 已满级'
             : `局内经验 ${exp} / ${expToNext}`;
-        this.playerStatText.string = `攻击 ${atk} · 防御 ${def} · 暴击 ${crit}%`;
-        this.playerSecondaryStatText.string = secondaryStats;
+        this.playerStatText.string = `攻击 ${atk} · 生命 ${maxHp} · 防御 ${def}`;
+        this.playerSecondaryStatText.string =
+            `力量 ${Math.round(strength)} · 敏捷 ${Math.round(agility)}` +
+            ` · 智力 ${Math.round(intelligence)}`;
     }
 
     updateWave(current: number, total: number, remaining: number): void {
@@ -564,8 +575,8 @@ export class BattleUI {
             `主线 1-${current} / 1-${total} · ${title} · ${progress}`;
     }
 
-    updateFactionProgress(text: string): void {
-        this.factionProgressText.string = text;
+    updateThreeKingdomsProgress(text: string): void {
+        this.threeKingdomsProgressText.string = text;
     }
 
     updateSkillSlots(slots: string[]): void {
@@ -590,10 +601,10 @@ export class BattleUI {
     updateGrowthResources(
         spiritStones: number,
         drawCost: number,
-        combo: number
+        exKillCounter: number
     ): void {
         this.spiritStoneText.string = `灵石 ${spiritStones}`;
-        this.comboText.string = `Combo ${combo}`;
+        this.exKillText.string = `EX击杀 ${exKillCounter}/400`;
         this.bondDrawCostText.string = `羁绊抽卡 ${drawCost}`;
         if (this.bondDrawButton) {
             this.bondDrawButton.interactable = spiritStones >= drawCost;
@@ -981,9 +992,9 @@ export class BattleUI {
             this.root,
             'BattleDebugPanel',
             430,
-            350,
+            520,
             385,
-            105,
+            20,
             new Color(15, 20, 31, 248)
         );
         this.debugPanel = panel;
@@ -992,7 +1003,7 @@ export class BattleUI {
             'Title',
             '开发调试 · 单局状态',
             0,
-            145,
+            230,
             20,
             new Color(235, 205, 120)
         );
@@ -1009,6 +1020,12 @@ export class BattleUI {
             { label: '查看技能节点', action: 'inspectSkillNodes' },
             { label: '查看羁绊卡', action: 'inspectBondCards' },
             { label: '查看动态权重', action: 'inspectWeights' },
+            { label: '主公+249杀', action: 'addCoreKills249' },
+            { label: '主公+1杀', action: 'addCoreKills1' },
+            { label: '添加阵营材料', action: 'addFactionMaterial' },
+            { label: '触发主公吞噬', action: 'triggerCoreDevour' },
+            { label: '设置已吞7/8', action: 'setDevourSeven' },
+            { label: '强制3UR→EX', action: 'forceThreeUr' },
             { label: '重置本局构筑', action: 'resetBuild' }
         ];
         for (let index = 0; index < buttons.length; index++) {
@@ -1019,7 +1036,7 @@ export class BattleUI {
                 panel,
                 item.label,
                 -105 + column * 210,
-                95 - row * 55,
+                180 - row * 50,
                 item.action
             );
         }
@@ -1068,30 +1085,31 @@ export class BattleUI {
 
     private getBondRarityName(rarity?: string): string {
         const names: Record<string, string> = {
-            green: '绿色羁绊',
-            blue: '蓝色羁绊',
-            purple: '紫色羁绊',
-            red: '红色羁绊',
-            rainbow: '彩色羁绊'
+            N: 'N级羁绊',
+            R: 'R级羁绊',
+            SR: 'SR级羁绊',
+            SSR: 'SSR级羁绊',
+            UR: 'UR级羁绊',
+            EX: 'EX级羁绊'
         };
         return names[rarity ?? ''] ?? '羁绊卡';
     }
 
 
     private getUpgradeCardBackground(choice: UpgradeCard): Color {
-        if (choice.rarity === 'core10' || choice.rarity === 'rainbow') {
+        if (choice.rarity === 'core10' || choice.rarity === 'EX') {
             return new Color(72, 45, 84, 252);
         }
-        if (choice.rarity === 'core9' || choice.rarity === 'red') {
+        if (choice.rarity === 'core9' || choice.rarity === 'UR') {
             return new Color(82, 38, 45, 252);
         }
-        if (choice.rarity === 'core6' || choice.rarity === 'purple') {
+        if (choice.rarity === 'core6' || choice.rarity === 'SSR') {
             return new Color(55, 39, 76, 252);
         }
-        if (choice.rarity === 'core3' || choice.rarity === 'blue') {
+        if (choice.rarity === 'core3' || choice.rarity === 'SR') {
             return new Color(31, 55, 79, 252);
         }
-        if (choice.rarity === 'green') {
+        if (choice.rarity === 'R') {
             return new Color(31, 67, 55, 252);
         }
         return choice.kind === 'basic'
@@ -1101,19 +1119,19 @@ export class BattleUI {
 
 
     private getUpgradeCardStroke(choice: UpgradeCard): Color {
-        if (choice.rarity === 'core10' || choice.rarity === 'rainbow') {
+        if (choice.rarity === 'core10' || choice.rarity === 'EX') {
             return new Color(242, 198, 92);
         }
-        if (choice.rarity === 'core9' || choice.rarity === 'red') {
+        if (choice.rarity === 'core9' || choice.rarity === 'UR') {
             return new Color(238, 96, 105);
         }
-        if (choice.rarity === 'core6' || choice.rarity === 'purple') {
+        if (choice.rarity === 'core6' || choice.rarity === 'SSR') {
             return new Color(194, 137, 229);
         }
-        if (choice.rarity === 'core3' || choice.rarity === 'blue') {
+        if (choice.rarity === 'core3' || choice.rarity === 'SR') {
             return new Color(95, 184, 224);
         }
-        if (choice.rarity === 'green') {
+        if (choice.rarity === 'R') {
             return new Color(102, 205, 149);
         }
         return new Color(95, 184, 224);

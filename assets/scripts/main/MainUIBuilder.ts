@@ -62,9 +62,9 @@ import {
     saveSkillProgress
 } from './Systems/PlayerProgressStorage';
 import {
-    getBondDefinition
-} from './GameData/BondData';
-import { RUNTIME_BOND_DEFINITIONS } from './GameData/BondGrowthData';
+    THREE_KINGDOMS_CARDS,
+    THREE_KINGDOMS_FACTIONS
+} from './GameData/ThreeKingdomsCardData';
 
 const { ccclass } = _decorator;
 
@@ -351,7 +351,7 @@ export class MainUIBuilder extends Component {
 
         const leftPanel = this.createPanel(
             homePage,
-            'FactionPanel',
+            'BondPanel',
             270,
             486,
             -493,
@@ -361,7 +361,7 @@ export class MainUIBuilder extends Component {
 
         this.createLabel(
             leftPanel,
-            'FactionTitle',
+            'BondTitle',
             'CURRENT BOND  ·  当前羁绊',
             0,
             204,
@@ -371,8 +371,8 @@ export class MainUIBuilder extends Component {
 
         this.createLabel(
             leftPanel,
-            'FactionName',
-            '天宫',
+            'BondName',
+            '三国',
             0,
             158,
             40,
@@ -381,8 +381,8 @@ export class MainUIBuilder extends Component {
 
         this.createLabel(
             leftPanel,
-            'FactionSubTitle',
-            '三部神将 · 共筑仙庭',
+            'BondSubTitle',
+            '魏蜀吴群 · 10选8进化',
             0,
             122,
             16,
@@ -403,28 +403,36 @@ export class MainUIBuilder extends Component {
 
         // 羁绊进度
 
-        this.createFactionProgress(
+        this.createBondProgress(
             leftPanel,
-            '战神',
-            '0 / 6',
+            '魏国',
+            '未启动',
             0,
-            52
+            66
         );
 
-        this.createFactionProgress(
+        this.createBondProgress(
             leftPanel,
-            '雷部',
-            '0 / 6',
+            '蜀国',
+            '未启动',
             0,
-            -12
+            22
         );
 
-        this.createFactionProgress(
+        this.createBondProgress(
             leftPanel,
-            '天王',
-            '0 / 6',
+            '吴国',
+            '未启动',
             0,
-            -76
+            -22
+        );
+
+        this.createBondProgress(
+            leftPanel,
+            '群雄',
+            '未启动',
+            0,
+            -66
         );
 
 
@@ -456,7 +464,7 @@ export class MainUIBuilder extends Component {
         this.createLabel(
             ultimatePlate,
             'Ultimate',
-            '✦  彩色 · 天宫  ✦',
+            '✦  EX · 吞食天地  ✦',
             0,
             0,
             21,
@@ -482,7 +490,7 @@ export class MainUIBuilder extends Component {
         this.createLabel(
             centerPanel,
             'CenterTitle',
-            '天宫 · 羁绊核心',
+            '三国 · 阵营核心',
             0,
             204,
             30,
@@ -508,13 +516,13 @@ export class MainUIBuilder extends Component {
 
         const core = this.createNode(
             centerPanel,
-            'FactionCore',
+            'BondCore',
             310,
             250
         );
 
         core.setPosition(0, 15, 0);
-        this.drawFactionCore(core);
+        this.drawBondCore(core);
 
         this.createLabel(
             core,
@@ -554,7 +562,7 @@ export class MainUIBuilder extends Component {
         this.createLabel(
             centerPanel,
             'Hint',
-            '收集战神、雷部、天王神将，逐步强化天宫羁绊',
+            '主公每200杀吞一张当前阵营卡；累计8吞新增UR',
             0,
             -137,
             17,
@@ -927,29 +935,30 @@ export class MainUIBuilder extends Component {
         this.createLabel(
             bondPanel,
             'Title',
-            `V1羁绊卡池  ${RUNTIME_BOND_DEFINITIONS.length}套`,
+            `三国羁绊卡池  ${THREE_KINGDOMS_CARDS.length}张`,
             0,
             155,
             29,
             new Color(216, 170, 235)
         );
 
-        for (let index = 0; index < RUNTIME_BOND_DEFINITIONS.length; index++) {
-            const definition = RUNTIME_BOND_DEFINITIONS[index];
+        const bondRoutes = THREE_KINGDOMS_FACTIONS;
+        for (let index = 0; index < bondRoutes.length; index++) {
+            const definition = bondRoutes[index];
             const row = this.createPanel(
                 bondPanel,
-                `RuntimeBond_${definition.id}`,
-                470,
+                `ThreeKingdomsRoute_${definition.id}`,
+                225,
                 112,
-                0,
-                58 - index * 125,
+                index % 2 === 0 ? -120 : 120,
+                58 - Math.floor(index / 2) * 125,
                 new Color(57, 45, 79, 245)
             );
             this.createLabel(
                 row,
                 'Name',
                 `◇ ${definition.name}`,
-                -85,
+                -15,
                 25,
                 23,
                 Color.WHITE
@@ -957,8 +966,8 @@ export class MainUIBuilder extends Component {
             this.createLabel(
                 row,
                 'Description',
-                definition.description,
-                -85,
+                definition.route,
+                -15,
                 -8,
                 17,
                 new Color(198, 187, 214)
@@ -967,7 +976,7 @@ export class MainUIBuilder extends Component {
                 row,
                 'InitialLevel',
                 '进入战斗后消耗灵石三选一，角色升级不会自动抽取',
-                -85,
+                -15,
                 -35,
                 16,
                 new Color(235, 205, 120)
@@ -1407,7 +1416,7 @@ export class MainUIBuilder extends Component {
         this.createLabel(
             page,
             'Title',
-            '神将图鉴',
+            '三国图鉴',
             0,
             220,
             34,
@@ -1417,18 +1426,19 @@ export class MainUIBuilder extends Component {
 
         // 三个分类
         const cats = [
-            ['战神', '0 / 6'],
-            ['雷部', '0 / 6'],
-            ['天王', '0 / 6']
+            ['魏国', '0 / 8'],
+            ['蜀国', '0 / 8'],
+            ['吴国', '0 / 8'],
+            ['群雄', '0 / 8']
         ];
-        const catX = [-400, 0, 400];
+        const catX = [-450, -150, 150, 450];
 
         for (let i = 0; i < cats.length; i++) {
 
             const cat = this.createPanel(
                 page,
                 'Cat_' + cats[i][0],
-                360,
+                260,
                 110,
                 catX[i],
                 150,
@@ -1440,24 +1450,23 @@ export class MainUIBuilder extends Component {
         }
 
 
-        // 六个神将卡片
+        // 四核与四张 UR 图鉴占位。
         const generals = [
-            '战神·1', '战神·2',
-            '雷部·1', '雷部·2',
-            '天王·1', '天王·2'
+            '曹操', '刘备', '孙权', '董卓',
+            '谋略·司马懿', '武神·赵云', '小霸王·孙策', '战神·吕布'
         ];
-        const genX = [-400, 0, 400];
+        const genX = [-450, -150, 150, 450];
         const genY = [-35, -175];
 
         for (let i = 0; i < generals.length; i++) {
 
-            const col = i % 3;
-            const row = Math.floor(i / 3);
+            const col = i % 4;
+            const row = Math.floor(i / 4);
 
             const card = this.createPanel(
                 page,
                 'Gen_' + generals[i],
-                360,
+                260,
                 130,
                 genX[col],
                 genY[row],
@@ -2112,7 +2121,7 @@ export class MainUIBuilder extends Component {
     }
 
 
-    private drawFactionCore(core: Node): void {
+    private drawBondCore(core: Node): void {
 
         const graphics = core.addComponent(Graphics);
 
@@ -2132,10 +2141,11 @@ export class MainUIBuilder extends Component {
         graphics.circle(0, 0, 72);
         graphics.stroke();
 
-        // 三个能量节点对应战神、雷部、天王。
-        this.createStatusOrb(core, -88, 55, new Color(221, 111, 79), '战', 17);
-        this.createStatusOrb(core, 88, 55, new Color(90, 181, 246), '雷', 17);
-        this.createStatusOrb(core, 0, -102, new Color(96, 205, 153), '王', 17);
+        // 四个能量节点对应魏、蜀、吴、群四大阵营。
+        this.createStatusOrb(core, -88, 55, new Color(126, 149, 238), '魏', 17);
+        this.createStatusOrb(core, 88, 55, new Color(90, 181, 246), '蜀', 17);
+        this.createStatusOrb(core, -65, -85, new Color(96, 205, 153), '吴', 17);
+        this.createStatusOrb(core, 65, -85, new Color(221, 111, 79), '群', 17);
 
         const star = this.createLabel(
             core,
@@ -2236,7 +2246,7 @@ export class MainUIBuilder extends Component {
     // 创建羁绊进度
     // =====================================================
 
-    createFactionProgress(
+    createBondProgress(
         parent: Node,
         name: string,
         progress: string,
@@ -2244,11 +2254,13 @@ export class MainUIBuilder extends Component {
         y: number
     ) {
 
-        const branchColor = name === '战神'
-            ? new Color(218, 105, 76)
-            : name === '雷部'
+        const branchColor = name === '魏国'
+            ? new Color(126, 149, 238)
+            : name === '蜀国'
                 ? new Color(82, 170, 239)
-                : new Color(86, 193, 139);
+                : name === '吴国'
+                    ? new Color(86, 193, 139)
+                    : new Color(218, 105, 76);
 
         const row = this.createPanel(
             parent,

@@ -155,6 +155,9 @@ export class PlayerLevelSystem {
         return attributes.hp +
             attributes.atk * 10 +
             attributes.def * 5 +
+            (attributes.strength ?? 0) * 2 +
+            (attributes.agility ?? 0) * 2 +
+            (attributes.intelligence ?? 0) * 2 +
             attributes.crit * 10;
     }
 
@@ -168,15 +171,17 @@ export class PlayerLevelSystem {
         this.state.attributes.atk += growth.atk ?? 0;
         this.state.attributes.def += growth.def ?? 0;
         this.state.attributes.crit += growth.crit ?? 0;
+        this.state.attributes.strength += (growth.strength ?? 0) +
+            (growth.allStats ?? 0);
+        this.state.attributes.agility += (growth.agility ?? 0) +
+            (growth.allStats ?? 0);
+        this.state.attributes.intelligence += (growth.intelligence ?? 0) +
+            (growth.allStats ?? 0);
     }
 
 
     private mergeGrowth(target: StatModifier, growth: StatModifier): void {
-        const keys: (keyof StatModifier)[] = [
-            'hp', 'atk', 'def', 'crit', 'attackPercent', 'hpPercent',
-            'defPercent', 'attackSpeedPercent', 'critDamagePercent',
-            'attackRangePercent', 'skillDamagePercent', 'healthRegenPercent'
-        ];
+        const keys = Object.keys(growth) as (keyof StatModifier)[];
         for (const key of keys) {
             const value = growth[key];
             if (value !== undefined) {

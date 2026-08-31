@@ -185,15 +185,12 @@ export class SkillSystem {
         const definition = this.getDefinition(skillId);
         const targetLevel = level ?? state?.level ?? definition?.level ?? 0;
         const result: StatModifier = {};
-        const keys: (keyof StatModifier)[] = [
-            'hp', 'atk', 'def', 'crit', 'attackPercent', 'hpPercent',
-            'defPercent', 'attackSpeedPercent', 'critDamagePercent',
-            'attackRangePercent', 'skillDamagePercent', 'healthRegenPercent'
-        ];
         const unlocked = definition?.levelEffects.filter((item) => {
             return item.level <= targetLevel;
         }) ?? [];
         for (const levelEffect of unlocked) {
+            const keys = Object.keys(levelEffect.effect) as
+                (keyof StatModifier)[];
             for (const key of keys) {
                 const value = levelEffect.effect[key];
                 if (value !== undefined) {

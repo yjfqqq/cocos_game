@@ -40,6 +40,11 @@ import type {
 import { UpgradeCardGenerator } from './Systems/UpgradeCardGenerator';
 import { BondGrowthSystem } from './Systems/BondGrowthSystem';
 import type { BondGrowthChoice } from './Systems/BondGrowthSystem';
+import { BondSlotSystem } from './Systems/BondSlotSystem';
+import {
+    ThreeKingdomsBondSystem
+} from './Systems/ThreeKingdomsBondSystem';
+import { KillGrowthSystem } from './Systems/KillGrowthSystem';
 import { saveSkillProgress } from './Systems/PlayerProgressStorage';
 
 import { BattleRunData } from './BattleRunData';
@@ -334,6 +339,9 @@ export class BattleSystem extends Component {
     private upgradeManager!: UpgradeManager;
     private upgradeCardGenerator!: UpgradeCardGenerator;
     private bondGrowthSystem!: BondGrowthSystem;
+    private bondSlotSystem!: BondSlotSystem;
+    private threeKingdomsBondSystem!: ThreeKingdomsBondSystem;
+    private killGrowthSystem!: KillGrowthSystem;
     private equipmentSystem!: EquipmentSystem;
     private enemies: MonsterData[] = [];
 
@@ -383,7 +391,19 @@ export class BattleSystem extends Component {
         this.upgradeCardGenerator = new UpgradeCardGenerator(
             this.buildRuntime
         );
-        this.bondGrowthSystem = new BondGrowthSystem();
+        this.bondSlotSystem = new BondSlotSystem();
+        this.threeKingdomsBondSystem = new ThreeKingdomsBondSystem(
+            this.bondSlotSystem,
+            this.runData
+        );
+        this.killGrowthSystem = new KillGrowthSystem(
+            this.runData,
+            this.threeKingdomsBondSystem
+        );
+        this.bondGrowthSystem = new BondGrowthSystem(
+            Math.random,
+            () => this.threeKingdomsBondSystem.getAvailableCards()
+        );
         this.currentWave = 1;
         this.totalExpReward = 0;
         this.totalGoldReward = 0;
@@ -411,6 +431,24 @@ export class BattleSystem extends Component {
             `第一关开始：完成五个主线任务并击败最终首领！`
         );
         this.startCombatTimers();
+    }
+
+
+    update(deltaTime: number): void {
+        if (
+            !this.threeKingdomsBondSystem ||
+            this.isPaused ||
+            this.battleComplete
+        ) {
+            return;
+        }
+        const result = this.threeKingdomsBondSystem.update(deltaTime);
+        if (!result.changed) return;
+        for (const message of result.messages) {
+            this.battleUI.addLog(message);
+        }
+        this.updateRunUI();
+        this.updateBuildUI();
     }
 
 
@@ -475,9 +513,6 @@ export class BattleSystem extends Component {
         }
         const attackTaskId = this.currentWave;
         const config = this.getNormalAttackConfig();
-        const bondAttack = this.bondGrowthSystem.recordNormalAttack(
-            Date.now() / 1000
-        );
         const awakeningReady = config.awakeningAttackInterval > 0 &&
             this.awakeningCounter >= config.awakeningAttackInterval;
         const targetCount = awakeningReady
@@ -498,7 +533,8 @@ export class BattleSystem extends Component {
                 ? config.awakeningDamageMultiplier
                 : index === 0
                     ? 1
-                    : config.scatterDamageMultiplier;
+                    : config.scatterDamageMultiplier *
+                        this.runData.multiHitDamageMultiplier;
             defeatedCount += this.executeNormalAttackProjectile(
                 primaryTargets[index],
                 multiplier,
@@ -517,60 +553,10 @@ export class BattleSystem extends Component {
             this.awakeningCounter++;
         }
 
-        if (
-            bondAttack.extraAttack &&
-            !this.battleComplete &&
-            this.currentWave === attackTaskId
-        ) {
-            const extraCandidates = this.getVisibleLivingEnemies();
-            const extraTarget = extraCandidates[0];
-            if (extraTarget) {
-                const unavailable = new Set<number>([extraTarget.id]);
-                defeatedCount += bondAttack.extraAttackTriggersEffects
-                    ? this.executeNormalAttackProjectile(
-                        extraTarget,
-                        bondAttack.extraDamageMultiplier,
-                        extraCandidates,
-                        unavailable,
-                        attackedIds,
-                        config,
-                        attackTaskId
-                    )
-                    : this.dealNormalAttackDamage(
-                        extraTarget,
-                        bondAttack.extraDamageMultiplier,
-                        config.damageMultiplier,
-                        attackedIds
-                    );
-            }
-        }
-
-        if (
-            bondAttack.areaStrikeTargets > 0 &&
-            !this.battleComplete &&
-            this.currentWave === attackTaskId
-        ) {
-            const areaTargets = this.getVisibleLivingEnemies().slice(
-                0,
-                bondAttack.areaStrikeTargets
-            );
-            for (const target of areaTargets) {
-                defeatedCount += this.dealNormalAttackDamage(
-                    target,
-                    bondAttack.areaStrikeDamageMultiplier,
-                    config.damageMultiplier,
-                    attackedIds
-                );
-            }
-        }
-        for (const message of bondAttack.messages) {
-            this.battleUI.addLog(message);
-        }
-
         this.battleUI.updateGrowthResources(
             this.bondGrowthSystem.getSpiritStones(),
             this.bondGrowthSystem.getDrawCost(),
-            bondAttack.combo
+            this.threeKingdomsBondSystem.getExKillCounter()
         );
 
         this.battleUI.playPlayerAttack(
@@ -649,7 +635,8 @@ export class BattleSystem extends Component {
             unavailable.add(splitTarget.id);
             defeatedCount += this.dealNormalAttackDamage(
                 splitTarget,
-                damageMultiplier * config.splitDamageMultiplier,
+                damageMultiplier * config.splitDamageMultiplier *
+                    this.runData.bounceDamageMultiplier,
                 config.damageMultiplier,
                 attackedIds
             );
@@ -672,8 +659,7 @@ export class BattleSystem extends Component {
                 base *
                 sourceMultiplier *
                 permanentSkillMultiplier *
-                this.runData.skillDamageMultiplier *
-                this.bondGrowthSystem.getCombatDamageMultiplier() *
+                this.runData.getDamageMultiplier('physical', 'basicAttack') *
                 (isCritical ? this.runData.critDamageMultiplier : 1) *
                 (0.9 + Math.random() * 0.2)
             )
@@ -794,6 +780,10 @@ export class BattleSystem extends Component {
             enemy.isElite,
             enemy.isBoss
         );
+        const killGrowth = this.killGrowthSystem.recordKill();
+        for (const message of killGrowth.messages) {
+            this.battleUI.addLog(message);
+        }
         if (spiritReward.amount > 0 && (enemy.isElite || enemy.isBoss)) {
             this.battleUI.addLog(
                 `${enemy.isBoss ? '首领' : '精英'}掉落灵石 ×` +
@@ -951,9 +941,19 @@ export class BattleSystem extends Component {
         this.upgradeChoicesVisible = false;
         const previousAttackInterval = this.runData.attackInterval;
         const previousMaxHp = this.runData.maxHp;
-        const result = this.bondGrowthSystem.selectCard(choice.sourceId);
-        if (result.success && result.bonus) {
-            this.runData.applyBonus(result.bonus);
+        const selection = this.bondGrowthSystem.selectCard(choice.sourceId);
+        const result = selection.success && selection.cardId
+            ? this.threeKingdomsBondSystem.acquireCard(selection.cardId)
+            : selection;
+        if (result.success && 'resourceEffect' in result) {
+            if (result.resourceEffect?.gold) {
+                addGold(result.resourceEffect.gold);
+            }
+            if (result.resourceEffect?.spiritStones) {
+                this.bondGrowthSystem.addSpiritStones(
+                    result.resourceEffect.spiritStones
+                );
+            }
             this.currentPlayerHp += Math.max(
                 0,
                 this.runData.maxHp - previousMaxHp
@@ -1402,11 +1402,18 @@ export class BattleSystem extends Component {
 
     private getMultiTargetCount(): number {
         const config = this.getNormalAttackConfig();
+        const levelTargets = Math.min(
+            BATTLE_BALANCE.maxTargetCount,
+            BATTLE_BALANCE.baseTargetCount + Math.floor(
+                Math.max(0, this.runData.level - 1) /
+                BATTLE_BALANCE.levelsPerExtraTarget
+            )
+        );
         const awakeningReady = config.awakeningAttackInterval > 0 &&
             this.awakeningCounter >= config.awakeningAttackInterval;
         return awakeningReady
-            ? Math.max(1, config.awakeningMaxTargets)
-            : 1 + config.scatterExtraTargets;
+            ? Math.max(levelTargets, config.awakeningMaxTargets)
+            : levelTargets + config.scatterExtraTargets;
     }
 
 
@@ -1440,10 +1447,10 @@ export class BattleSystem extends Component {
         this.battleUI.updateSkillSlots(skillSlots);
 
         this.battleUI.updateBondSlots(
-            this.bondGrowthSystem.getCardDescriptions()
+            this.threeKingdomsBondSystem.getSlotDescriptions()
         );
-        this.battleUI.updateFactionProgress(
-            this.bondGrowthSystem.getProgressText()
+        this.battleUI.updateThreeKingdomsProgress(
+            this.threeKingdomsBondSystem.getProgressText()
         );
     }
 
@@ -1458,11 +1465,11 @@ export class BattleSystem extends Component {
             this.runData.exp,
             this.runData.expToNextLevel,
             this.runData.atk,
+            this.runData.maxHp,
             this.runData.def,
-            this.runData.crit,
-            `${this.runData.secondaryStatsText}` +
-            ` · 携带${this.buildRuntime.selectedSkillIds.length}技能` +
-            ' · 单体攻击'
+            this.runData.strength,
+            this.runData.agility,
+            this.runData.intelligence
         );
         this.battleUI.updatePlayerHp(
             this.currentPlayerHp,
@@ -1471,7 +1478,7 @@ export class BattleSystem extends Component {
         this.battleUI.updateGrowthResources(
             this.bondGrowthSystem.getSpiritStones(),
             this.bondGrowthSystem.getDrawCost(),
-            this.bondGrowthSystem.getCombo()
+            this.threeKingdomsBondSystem.getExKillCounter()
         );
     }
 
@@ -1523,7 +1530,7 @@ export class BattleSystem extends Component {
                 );
             },
             inspectBondCards: () => {
-                const cards = this.bondGrowthSystem.getCardDescriptions();
+                const cards = this.threeKingdomsBondSystem.getSlotDescriptions();
                 this.battleUI.addLog(
                     `羁绊卡：${cards.length > 0 ? cards.join('、') : '无'}`
                 );
@@ -1535,6 +1542,48 @@ export class BattleSystem extends Component {
                 this.battleUI.addLog(
                     `羁绊权重：${this.bondGrowthSystem.getDebugWeightText()}`
                 );
+            },
+            addCoreKills249: () => {
+                const result = this.threeKingdomsBondSystem
+                    .debugAddCoreKills(249);
+                for (const message of result.messages) {
+                    this.battleUI.addLog(message);
+                }
+                this.afterDebugStateChange('调试：主公击杀计数 +249');
+            },
+            addCoreKills1: () => {
+                const result = this.threeKingdomsBondSystem
+                    .debugAddCoreKills(1);
+                for (const message of result.messages) {
+                    this.battleUI.addLog(message);
+                }
+                this.afterDebugStateChange('调试：主公击杀计数 +1');
+            },
+            addFactionMaterial: () => {
+                const result = this.threeKingdomsBondSystem
+                    .debugAddFirstActiveFactionMaterial();
+                this.afterDebugStateChange(`调试：${result.message}`);
+            },
+            triggerCoreDevour: () => {
+                const result = this.threeKingdomsBondSystem
+                    .debugTriggerFirstCoreDevour();
+                for (const message of result.messages) {
+                    this.battleUI.addLog(message);
+                }
+                this.afterDebugStateChange('调试：触发一次主公吞噬');
+            },
+            setDevourSeven: () => {
+                const message = this.threeKingdomsBondSystem
+                    .debugSetFirstFactionConsumedCount(7);
+                this.afterDebugStateChange(`调试：${message}`);
+            },
+            forceThreeUr: () => {
+                const result = this.threeKingdomsBondSystem
+                    .debugForceThreeUrCompletion();
+                for (const message of result.messages) {
+                    this.battleUI.addLog(message);
+                }
+                this.afterDebugStateChange('调试：强制3UR检查EX清理');
             },
             resetBuild: () => this.restartStage()
         });

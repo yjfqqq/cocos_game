@@ -3,9 +3,8 @@ import {
     SKILL_DEFINITIONS
 } from './SkillData';
 import {
-    BOND_DEFINITIONS,
-    TIANGONG_BOND_ID
-} from './BondData';
+    THREE_KINGDOMS_BOND_ID
+} from './ThreeKingdomsCardData';
 
 
 export interface BattleBuildSelection {
@@ -30,7 +29,7 @@ export const BATTLE_BUILD_LIMITS = {
 
 export const DEFAULT_BATTLE_BUILD: BattleBuildSelection = {
     selectedSkillIds: [NORMAL_ATTACK_SKILL_ID],
-    selectedBondIds: [TIANGONG_BOND_ID]
+    selectedBondIds: [THREE_KINGDOMS_BOND_ID]
 };
 
 
@@ -46,9 +45,7 @@ export function normalizeBattleBuildSelection(
     const knownSkillIds = new Set(
         SKILL_DEFINITIONS.map((skill) => skill.skillId)
     );
-    const knownBondIds = new Set(
-        BOND_DEFINITIONS.map((bond) => bond.bondId)
-    );
+    const knownBondIds = new Set([THREE_KINGDOMS_BOND_ID]);
     const skillIds = [
         NORMAL_ATTACK_SKILL_ID,
         ...selection.selectedSkillIds
@@ -56,6 +53,9 @@ export function normalizeBattleBuildSelection(
         return knownSkillIds.has(id) && items.indexOf(id) === index;
     }).slice(0, BATTLE_BUILD_LIMITS.maxEquippedSkills);
     const bondIds = selection.selectedBondIds
+        .map((id) => id === 'tiangong' || id === 'tiangong-bond'
+            ? THREE_KINGDOMS_BOND_ID
+            : id)
         .filter((id, index, items) => {
             return knownBondIds.has(id) && items.indexOf(id) === index;
         })

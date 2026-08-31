@@ -61,9 +61,9 @@ export const BATTLE_BALANCE = {
     bondChoiceCount: 3,
     freeRefreshesPerRun: 2,
     basicCardOfferEvery: 4,
-    baseTargetCount: 1,
+    baseTargetCount: 2,
     levelsPerExtraTarget: 4,
-    maxTargetCount: 1,
+    maxTargetCount: 5,
 
     // 每 10 只按 5 近战、3 远程、2 强化交错生成；
     // 两只强化怪分别采用近战和远程行为。

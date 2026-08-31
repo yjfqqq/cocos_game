@@ -5,7 +5,21 @@ export interface PlayerAttributes {
     hp: number;
     atk: number;
     def: number;
+    strength: number;
+    agility: number;
+    intelligence: number;
     crit: number;
+    attackSpeed: number;
+    skillHaste: number;
+    physicalCrit: number;
+    magicCrit: number;
+    physicalCritDamage: number;
+    magicCritDamage: number;
+    block: number;
+    physicalDamageBonus: number;
+    magicDamageBonus: number;
+    basicAttackDamageBonus: number;
+    skillDamageBonus: number;
     power: number;
 }
 
@@ -50,10 +64,24 @@ export const gamePlayerData: PlayerData = {
         hp: 100,
         atk: 10,
         def: 5,
+        strength: 0,
+        agility: 0,
+        intelligence: 0,
         crit: 5,
+        attackSpeed: 1,
+        skillHaste: 0,
+        physicalCrit: 0,
+        magicCrit: 0,
+        physicalCritDamage: 1.5,
+        magicCritDamage: 1.5,
+        block: 0,
+        physicalDamageBonus: 0,
+        magicDamageBonus: 0,
+        basicAttackDamageBonus: 0,
+        skillDamageBonus: 0,
         power: 275
     },
-    currentBondId: 'tiangong-bond',
+    currentBondId: 'three-kingdoms',
     skills: [
         {
             skillId: 'normal-attack',
@@ -72,6 +100,33 @@ export const gamePlayerData: PlayerData = {
     gold: 0,
     diamond: 0
 };
+
+// 旧存档只包含 hp/atk/def/crit/power；缺失字段在读取时统一补默认值。
+export function normalizePlayerAttributes(
+    attributes: Partial<PlayerAttributes>
+): PlayerAttributes {
+    return {
+        hp: attributes.hp ?? 100,
+        atk: attributes.atk ?? 10,
+        def: attributes.def ?? 5,
+        strength: attributes.strength ?? 0,
+        agility: attributes.agility ?? 0,
+        intelligence: attributes.intelligence ?? 0,
+        crit: attributes.crit ?? 5,
+        attackSpeed: attributes.attackSpeed ?? 1,
+        skillHaste: attributes.skillHaste ?? 0,
+        physicalCrit: attributes.physicalCrit ?? 0,
+        magicCrit: attributes.magicCrit ?? 0,
+        physicalCritDamage: attributes.physicalCritDamage ?? 1.5,
+        magicCritDamage: attributes.magicCritDamage ?? 1.5,
+        block: attributes.block ?? 0,
+        physicalDamageBonus: attributes.physicalDamageBonus ?? 0,
+        magicDamageBonus: attributes.magicDamageBonus ?? 0,
+        basicAttackDamageBonus: attributes.basicAttackDamageBonus ?? 0,
+        skillDamageBonus: attributes.skillDamageBonus ?? 0,
+        power: attributes.power ?? 0
+    };
+}
 
 
 // 旧存档缺少技能数组或普攻记录时按 Lv1 补齐，不覆盖已有培养等级。
